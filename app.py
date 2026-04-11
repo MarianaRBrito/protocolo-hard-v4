@@ -435,7 +435,6 @@ df = carregar_base()
 sorteios = extrair_sorteios(df)
 sorteios_tuple = tuple(tuple(s) for s in sorteios)
 
-st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Lotof%C3%A1cil_logo.svg/320px-Lotof%C3%A1cil_logo.svg.png", width=180)
 st.sidebar.title("⚙️ Protocolo Hard V4")
 st.sidebar.markdown(f"**Base:** {len(sorteios)} concursos | C1–C{df['Concurso'].max()}")
 
