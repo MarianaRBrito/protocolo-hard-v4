@@ -368,7 +368,7 @@ PREMIOS = {15: 1_500_000, 14: 1500, 13: 25, 12: 10, 11: 5}
 PROB = {15: 1/3_268_760, 14: 15/3_268_760, 13: 105/3_268_760,
         12: 455/3_268_760, 11: 1365/3_268_760}
 
-def valor_esperado(custo=3.0):
+def valor_esperado(custo=3.5):
     ev = sum(PREMIOS[k] * PROB[k] for k in PREMIOS)
     return round(ev, 4), round(ev / custo, 4)
 
@@ -750,7 +750,7 @@ with tabs[11]:  # VALOR ESPERADO
     ev, ev_ratio = valor_esperado()
     col1, col2, col3 = st.columns(3)
     col1.metric("EV por jogo (R$)", f"R$ {ev:.4f}")
-    col2.metric("Custo por jogo", "R$ 3,00")
+    col2.metric("Custo por jogo", "R$ 3,50")
     col3.metric("Ratio EV/Custo", f"{ev_ratio:.4f}")
     st.info("📌 EV calculado sobre prêmios fixos estimados. O rateio real reduz o EV em concursos acumulados.")
 
