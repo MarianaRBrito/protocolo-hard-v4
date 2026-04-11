@@ -483,7 +483,8 @@ tabs = st.tabs([
     "🌡️ Térmica", "⏱️ Atraso & Ciclo", "📐 Estrutural",
     "🔢 Composição", "📏 Sequências & Gaps", "🎯 Similaridade N+1/N+2",
     "🔗 Coocorrência", "📊 Backtesting", "🧪 Filtros & Score",
-    "🎲 Monte Carlo", "📈 Tendência Rolling", "⚖️ Valor Esperado", "🏆 Relatório Final"
+    "🎲 Monte Carlo", "📈 Tendência Rolling", "⚖️ Valor Esperado",
+    "🎰 Gerar Jogos", "🏆 Relatório Final"
 ])
 
 # ──────────────────────────────────────────────────────────────
@@ -762,8 +763,271 @@ with tabs[11]:  # VALOR ESPERADO
     ])
     st.dataframe(df_ev, use_container_width=True, hide_index=True)
 
+
 # ──────────────────────────────────────────────────────────────
-with tabs[12]:  # RELATÓRIO FINAL
+with tabs[12]:  # GERAR JOGOS — MOTOR AGRESSIVO
+    st.header("🎰 Gerador Agressivo — Protocolo Hard V4")
+    st.info("Motor de score ponderado: todas as análises convergem para rankear as dezenas antes de gerar a combinação.")
+
+    # ── Pesos do cenário agressivo ──────────────────────────────
+    # G1 Comportamento recente (N+1/N+2 + freq + rolling)  → 40%
+    # G2 Ciclo e atraso                                     → 30%
+    # G3 Padrão histórico (coocorrência + Markov + trios)   → 20%
+    # G4 Estrutural (faixas, primos, Fibonacci)             →  5%
+    # G5 Entropia                                           →  5%
+    PESOS = {"g1": 0.40, "g2": 0.30, "g3": 0.20, "g4": 0.05, "g5": 0.05}
+
+    def normalizar(dct):
+        """Normaliza dict {dezena: valor} para [0,1]"""
+        vals = list(dct.values())
+        mn, mx = min(vals), max(vals)
+        if mx == mn: return {k: 0.5 for k in dct}
+        return {k: (v - mn) / (mx - mn) for k, v in dct.items()}
+
+    def score_agressivo(sorteios, janela, concurso_ref, threshold_sim, pesos):
+        """Calcula score ponderado para cada dezena 1-25."""
+        scores = {n: 0.0 for n in range(1, 26)}
+
+        # ── G1: Comportamento recente (40%) ──────────────────
+        # N+1/N+2
+        sim, fortes_n, apoio_n = projetar_isca(concurso_ref, sorteios, threshold_sim)
+        g1_n12 = {n: 0.0 for n in range(1, 26)}
+        for n in fortes_n: g1_n12[n] = 1.0
+        for n in apoio_n:  g1_n12[n] = max(g1_n12[n], 0.6)
+
+        # Frequência janela curta (50) vs longa (janela)
+        f50  = freq_simples(sorteios, 50)
+        f_longa = freq_simples(sorteios, janela)
+        g1_freq = normalizar({n: f50[n] for n in range(1,26)})
+
+        # Tendência rolling: alta = freq recente > histórica
+        g1_roll = {}
+        for n in range(1, 26):
+            t50  = f50[n]  / 50
+            tlong = f_longa[n] / janela
+            g1_roll[n] = max(0.0, (t50 - tlong) / (tlong + 1e-9))
+        g1_roll = normalizar(g1_roll)
+
+        g1 = {n: (g1_n12[n]*0.50 + g1_freq[n]*0.30 + g1_roll[n]*0.20) for n in range(1,26)}
+
+        # ── G2: Ciclo e atraso (30%) ──────────────────────────
+        total = len(sorteios)
+        ultimo_idx = {}
+        for i, s in enumerate(sorteios):
+            for x in s: ultimo_idx[x] = i
+
+        g2_atraso = {}
+        g2_ciclo  = {}
+        for n in range(1, 26):
+            idx = ultimo_idx.get(n, -1)
+            atraso = total - 1 - idx if idx >= 0 else total
+            cm = ciclo_medio(sorteios, n) or atraso
+            # Quanto mais vencida (atraso > ciclo), maior o score
+            ratio = atraso / cm if cm > 0 else 1.0
+            g2_atraso[n] = min(ratio, 3.0)   # cap em 3x o ciclo
+            g2_ciclo[n]  = ratio
+
+        g2_atraso = normalizar(g2_atraso)
+        g2_ciclo  = normalizar(g2_ciclo)
+        g2 = {n: (g2_atraso[n]*0.60 + g2_ciclo[n]*0.40) for n in range(1,26)}
+
+        # ── G3: Padrão histórico (20%) ────────────────────────
+        # Coocorrência: soma das frequências de todos os pares que contêm n
+        pares_freq = Counter()
+        for s in sorteios[-500:]:
+            for a, b in combinations(sorted(s), 2):
+                pares_freq[(a,b)] += 1
+
+        g3_cooc = {n: 0.0 for n in range(1,26)}
+        for (a,b), cnt in pares_freq.items():
+            g3_cooc[a] += cnt
+            g3_cooc[b] += cnt
+        g3_cooc = normalizar(g3_cooc)
+
+        # Markov: probabilidade de n aparecer no próximo concurso
+        trans = matriz_markov_simples(tuple(tuple(s) for s in sorteios), janela=min(janela,500))
+        ultimo_sorteio = set(sorteios[concurso_ref])
+        g3_markov = {n: 0.0 for n in range(1,26)}
+        total_trans = sum(sum(trans[x].values()) for x in ultimo_sorteio if x in trans)
+        for x in ultimo_sorteio:
+            if x in trans:
+                for suc, cnt in trans[x].items():
+                    g3_markov[suc] = g3_markov.get(suc, 0) + cnt
+        g3_markov = normalizar(g3_markov)
+
+        # Trios: dezenas que participam de trios frequentes
+        trios_freq = Counter()
+        for s in sorteios[-500:]:
+            for trio in combinations(sorted(s), 3):
+                trios_freq[trio] += 1
+        g3_trios = {n: 0.0 for n in range(1,26)}
+        for trio, cnt in trios_freq.most_common(100):
+            for x in trio: g3_trios[x] += cnt
+        g3_trios = normalizar(g3_trios)
+
+        g3 = {n: (g3_cooc[n]*0.40 + g3_markov[n]*0.40 + g3_trios[n]*0.20) for n in range(1,26)}
+
+        # ── G4: Estrutural / composição (5%) ─────────────────
+        # Dezenas bem distribuídas por faixa recebem bônus
+        # Proxy: dezenas que apareceram em jogos com boas faixas
+        g4 = {n: 0.5 for n in range(1,26)}  # neutro por padrão
+
+        # ── G5: Entropia (5%) ─────────────────────────────────
+        freq_all = freq_simples(sorteios)
+        total_all = sum(freq_all.values())
+        g5_raw = {n: freq_all[n]/total_all for n in range(1,26)}
+        # Dezenas com freq próxima da esperada (1/25 = 0.04) = mais entrópicas
+        esperado = 1/25
+        g5 = normalizar({n: 1 - abs(v - esperado)/esperado for n,v in g5_raw.items()})
+
+        # ── Score Final ───────────────────────────────────────
+        for n in range(1, 26):
+            scores[n] = (
+                pesos["g1"] * g1[n] +
+                pesos["g2"] * g2[n] +
+                pesos["g3"] * g3[n] +
+                pesos["g4"] * g4[n] +
+                pesos["g5"] * g5[n]
+            )
+
+        return scores, sim, fortes_n, apoio_n
+
+    # ── Interface ─────────────────────────────────────────────
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        qtd_jogos = st.radio("Quantos jogos gerar?", [1, 2, 3], index=1, horizontal=True)
+    with col_cfg2:
+        seed_val = st.number_input("Seed (0 = aleatório)", min_value=0, value=0, step=1)
+    with col_cfg3:
+        top_pool = st.slider("Tamanho do pool (top N dezenas)", 15, 22, 18)
+
+    st.markdown("**Dezenas fixas obrigatórias** (opcional — separe por espaço):")
+    fixas_input = st.text_input("Ex: 01 05 13 18", key="fixas_gen")
+    fixas = []
+    if fixas_input.strip():
+        try:
+            fixas = [int(x) for x in fixas_input.strip().split() if 1 <= int(x) <= 25]
+        except:
+            st.warning("Formato inválido nas fixas.")
+
+    # Mostra o ranking antes de gerar
+    with st.expander("📊 Ver ranking de score por dezena (antes de gerar)", expanded=False):
+        with st.spinner("Calculando scores..."):
+            scores_preview, _, _, _ = score_agressivo(sorteios, janela_analise, concurso_ref, threshold_sim, PESOS)
+        ranking_df = pd.DataFrame([
+            {"Dezena": n, "Score": round(scores_preview[n], 4),
+             "Rank": i+1}
+            for i, (n, _) in enumerate(sorted(scores_preview.items(), key=lambda x: -x[1]))
+        ])
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            st.dataframe(ranking_df.head(13), use_container_width=True, hide_index=True)
+        with col_r2:
+            st.dataframe(ranking_df.tail(12), use_container_width=True, hide_index=True)
+        st.caption(f"Pesos: G1 Recente={PESOS['g1']*100:.0f}% | G2 Ciclo={PESOS['g2']*100:.0f}% | G3 Histórico={PESOS['g3']*100:.0f}% | G4 Estrutural={PESOS['g4']*100:.0f}% | G5 Entropia={PESOS['g5']*100:.0f}%")
+
+    if st.button("🎯 Gerar Combinações Agressivas", type="primary"):
+        if seed_val > 0:
+            random.seed(seed_val)
+
+        with st.spinner("Calculando score de todas as análises..."):
+            scores, _sim, _fortes, _apoio = score_agressivo(
+                sorteios, janela_analise, concurso_ref, threshold_sim, PESOS)
+
+        # Pool = top N dezenas por score + fixas obrigatórias
+        ranking_ord = sorted(scores.items(), key=lambda x: -x[1])
+        pool = [n for n, _ in ranking_ord[:top_pool]]
+        for f in fixas:
+            if f not in pool: pool.append(f)
+
+        st.write(f"**Pool de {len(pool)} dezenas:** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
+
+        jogos_gerados = []
+        tentativas_total = 0
+
+        while len(jogos_gerados) < qtd_jogos and tentativas_total < 100000:
+            tentativas_total += 1
+
+            # Amostragem ponderada pelo score dentro do pool
+            pool_scores = np.array([scores[n] for n in pool])
+            pool_scores = pool_scores / pool_scores.sum()
+
+            base = fixas[:15]
+            restante_pool = [n for n in pool if n not in base]
+            restante_scores = np.array([scores[n] for n in restante_pool])
+            restante_scores = restante_scores / restante_scores.sum()
+
+            faltam = 15 - len(base)
+            if len(restante_pool) >= faltam:
+                escolhidos = list(np.random.choice(restante_pool, size=faltam, replace=False, p=restante_scores))
+                candidato = sorted(base + escolhidos)
+            else:
+                extras = [n for n in range(1,26) if n not in base and n not in restante_pool]
+                candidato = sorted(base + restante_pool + random.sample(extras, faltam - len(restante_pool)))
+
+            alertas = filtrar_jogo(candidato, sorteios, config_filtro)
+            if not alertas and candidato not in jogos_gerados:
+                jogos_gerados.append(candidato)
+
+        if jogos_gerados:
+            st.success(f"✅ {len(jogos_gerados)} combinação(ões) gerada(s) em {tentativas_total} tentativas")
+            st.markdown("---")
+
+            for i, jogo in enumerate(jogos_gerados):
+                perf = perfil_estrutural(jogo)
+                bt = backtesting_jogo(jogo, sorteios, ultimos=200)
+                comp = composicao_numerica(jogo)
+                faixas = distribuicao_faixas(jogo)
+                max_seq, _ = contar_consecutivos(jogo)
+                score_jogo_val = round(sum(scores[n] for n in jogo), 4)
+                alertas_final = filtrar_jogo(jogo, sorteios, config_filtro)
+
+                st.subheader(f"🃏 Combinação {i+1}")
+                nums_str = "  ·  ".join(f"**{n:02d}**" for n in jogo)
+                st.markdown(f"## {nums_str}")
+
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("Score Total", round(score_jogo_val, 3))
+                col2.metric("Soma", perf["soma"])
+                col3.metric("Pares / Ímpares", f"{perf['pares']} / {perf['impares']}")
+                col4.metric("Backtesting 11+", f"{bt['pct_11+']}%")
+                col5.metric("Backtesting 13+", f"{bt['pct_13+']}%")
+
+                col6, col7, col8 = st.columns(3)
+                col6.write(f"**Faixas [F1→F5]:** {faixas}")
+                col7.write(f"**Primos:** {comp['primos']} | **Fib:** {comp['fibonacci']} | **Mult3:** {comp['multiplos_3']}")
+                col8.write(f"**Maior seq.:** {max_seq} | **Amplitude:** {perf['amplitude']}")
+
+                # Breakdown do score por dezena
+                with st.expander(f"🔬 Breakdown do score — Combinação {i+1}"):
+                    breakdown = pd.DataFrame([
+                        {"Dezena": n,
+                         "Score": round(scores[n], 4),
+                         "Rank Geral": sorted(scores, key=lambda x: -scores[x]).index(n)+1,
+                         "G1 Recente": "✅" if scores[n] >= sorted(scores.values(), reverse=True)[int(25*0.4)] else "—",
+                         "G2 Ciclo":   "✅" if n in dezenas_em_pico_atraso(sorteios)["Dezena"].tolist() else "—",
+                         "G3 Histórico": "✅" if n in (_fortes + _apoio) else "—",
+                        }
+                        for n in sorted(jogo)
+                    ])
+                    st.dataframe(breakdown, use_container_width=True, hide_index=True)
+
+                if not alertas_final:
+                    st.success("✅ Passou em todos os filtros Hard V4")
+                st.markdown("---")
+
+            custo_total = len(jogos_gerados) * 3.5
+            st.info(f"💰 Custo total: **{len(jogos_gerados)} jogo(s) × R$ 3,50 = R$ {custo_total:.2f}**")
+
+            if len(jogos_gerados) > 1:
+                st.subheader("📐 Cobertura Hamming entre os jogos gerados")
+                st.dataframe(cobertura_entre_jogos(jogos_gerados), use_container_width=True, hide_index=True)
+        else:
+            st.error("❌ Não foi possível gerar combinações aprovadas. Relaxe os filtros no menu lateral.")
+
+
+# ──────────────────────────────────────────────────────────────
+with tabs[13]:  # RELATÓRIO FINAL
     st.header("🏆 Relatório Final Integrado")
     st.markdown(f"""
     **Protocolo Hard V4 — Relatório de Sessão**
