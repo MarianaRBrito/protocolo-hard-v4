@@ -791,7 +791,13 @@ with tabs[12]:
             sorteios, janela_analise, concurso_ref, threshold_sim, perfil["pesos"])
 
         ranking_ord = sorted(scores.items(), key=lambda x: -x[1])
-        pool = [n for n, _ in ranking_ord[:perfil["top_pool"]]]
+
+        # Pool dinâmico: cresce conforme quantidade solicitada
+        # Agressiva: mín 15, mas expande para cobrir qtd_jogos
+        # Híbrida: mín 20, expande livremente
+        pool_base = perfil["top_pool"]
+        pool_dinamico = max(pool_base, min(qtd_jogos + 5, 25))
+        pool = [n for n, _ in ranking_ord[:pool_dinamico]]
         for f in fixas:
             if f not in pool: pool.append(f)
 
@@ -799,12 +805,34 @@ with tabs[12]:
 
         jogos_gerados = []
         tentativas_total = 0
-        max_tentativas = max(100000, qtd_jogos * 5000)
+        max_tentativas = max(200000, qtd_jogos * 10000)
+
+        # Similaridade progressiva: afrouxa se travar
+        max_comum_atual = perfil["max_comum"]
+        travamentos = 0
+        ultimo_gerado = 0
 
         prog.progress(10, text="Gerando combinações...")
 
         while len(jogos_gerados) < qtd_jogos and tentativas_total < max_tentativas:
             tentativas_total += 1
+
+            # Detecta travamento: se ficou 20000 tentativas sem gerar novo jogo
+            if tentativas_total - ultimo_gerado > 20000 and len(jogos_gerados) > 0:
+                travamentos += 1
+                ultimo_gerado = tentativas_total
+                # Afrouxa similaridade progressivamente (+1 a cada travamento)
+                max_comum_atual = min(perfil["max_comum"] + travamentos, 13)
+                # Expande pool se ainda há espaço
+                if pool_dinamico < 25:
+                    pool_dinamico = min(pool_dinamico + 2, 25)
+                    pool = [n for n, _ in ranking_ord[:pool_dinamico]]
+                    for f in fixas:
+                        if f not in pool: pool.append(f)
+                prog.progress(
+                    min(10 + int(len(jogos_gerados)/qtd_jogos*85), 95),
+                    text=f"Gerados {len(jogos_gerados)}/{qtd_jogos} — ajustando pool ({pool_dinamico} dez, sim. máx {max_comum_atual})..."
+                )
 
             base = fixas[:15]
             restante_pool = [n for n in pool if n not in base]
@@ -823,22 +851,27 @@ with tabs[12]:
             alertas = filtrar_jogo(candidato, sorteios, config_filtro)
             if alertas: continue
 
-            # Controle de similaridade entre jogos gerados
+            # Controle de similaridade progressivo
             muito_similar = False
             for j_anterior in jogos_gerados:
                 em_comum = 15 - distancia_hamming(candidato, j_anterior)
-                if em_comum > perfil["max_comum"]:
+                if em_comum > max_comum_atual:
                     muito_similar = True
                     break
             if muito_similar: continue
 
             if candidato not in jogos_gerados:
                 jogos_gerados.append(candidato)
+                ultimo_gerado = tentativas_total
                 pct = min(10 + int(len(jogos_gerados)/qtd_jogos*85), 95)
                 prog.progress(pct, text=f"Gerados {len(jogos_gerados)}/{qtd_jogos}...")
 
         prog.progress(100, text="Concluído!")
 
+        # Aviso se não gerou tudo
+        if len(jogos_gerados) < qtd_jogos:
+            st.warning(f"⚠️ Gerados **{len(jogos_gerados)}** de **{qtd_jogos}** solicitados. O protocolo não encontrou mais combinações suficientemente distintas. Tente aumentar a quantidade ou usar o perfil Híbrida.")
+        
         if jogos_gerados:
             st.success(f"✅ {len(jogos_gerados)} combinação(ões) gerada(s) em {tentativas_total:,} tentativas")
             st.markdown("---")
