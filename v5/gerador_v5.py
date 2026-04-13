@@ -714,23 +714,26 @@ def gerar_jogos_v5(
 # =============================================================================
 
 def breakdown_jogo(av: dict, executor: PipelineExecutor) -> pd.DataFrame:
-    """Retorna DataFrame com contribuição de cada dezena do jogo."""
     scores_glob = executor.score_consolidado()
+    at_res     = get_atraso(executor)
+    vencidas_g = at_res.get("vencidas", [])
+    n12_res    = executor.ctx["resultados"].get("n1_n2", {})
+    fortes     = n12_res.get("fortes", [])
+
     rows = []
     for d in sorted(av["jogo"]):
-        sc = scores_glob.get(d, 0.0)
+        sc   = scores_glob.get(d, 0.0)
         rank = sorted(DEZENAS, key=lambda x: -scores_glob.get(x, 0)).index(d) + 1
-        at_res  = get_atraso(executor)
         analise = at_res.get("analise", {}).get(d, {})
         rows.append({
-            "Dezena":       d,
-            "Score":        round(sc, 4),
-            "Rank Global":  rank,
-            "Atraso":       analise.get("atraso", "—"),
-            "Razão A/C":    analise.get("razao", "—"),
-            "Status":       analise.get("status_ind", "—"),
-            "Vencida":      "🔴" if d in av.get("cob_vencidas", []) else "",
-            "N+1/N+2":      "🔥" if d in executor.ctx["resultados"].get("n1_n2", {}).get("fortes", []) else "",
+            "Dezena":      d,
+            "Score":       round(sc, 4),
+            "Rank Global": rank,
+            "Atraso":      analise.get("atraso", "—"),
+            "Razão A/C":   analise.get("razao", "—"),
+            "Status":      analise.get("status_ind", "—"),
+            "Vencida":     "🔴" if d in vencidas_g else "",
+            "N+1/N+2":     "🔥" if d in fortes else "",
         })
     return pd.DataFrame(rows)
 
