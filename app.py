@@ -504,7 +504,7 @@ tabs = st.tabs([
     "4️⃣ Composição","5️⃣ Sequências","6️⃣ N+1/N+2",
     "7️⃣ Coocorrência","8️⃣ Monte Carlo",
     "📊 Backtesting","🧪 Filtros","📈 Tendência","⚖️ EV",
-    "🎰 Gerar","🏆 Relatório"
+    "🏆 Relatório","🎰 Gerar"
 ])
 
 # ══════════════════════════════════════════════════════════════
@@ -1090,7 +1090,7 @@ with tabs[11]:
 # ══════════════════════════════════════════════════════════════
 # GERADOR — só libera com 8/8 etapas
 # ══════════════════════════════════════════════════════════════
-with tabs[12]:
+with tabs[13]:
     st.header("🎰 Gerador — Protocolo Hard V4")
     ok,tot=status_count()
 
@@ -1366,7 +1366,7 @@ with tabs[12]:
 # ══════════════════════════════════════════════════════════════
 # RELATÓRIO FINAL
 # ══════════════════════════════════════════════════════════════
-with tabs[13]:
+with tabs[12]:
     st.header("🏆 Relatório Final")
     analise=st.session_state["analise"]
     ok,tot=status_count()
