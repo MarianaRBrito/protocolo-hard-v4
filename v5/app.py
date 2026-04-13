@@ -5,7 +5,6 @@
 # Para rodar: streamlit run v5/app.py
 # Requer: base_lotofacil.csv na raiz do projeto (ou ../base_lotofacil.csv)
 # =============================================================================
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,8 +12,14 @@ import sys
 import os
 import hashlib
 
-# Garante que os módulos v5 sejam encontrados
-sys.path.insert(0, os.path.dirname(__file__))
+# Garante que os módulos v5 sejam encontrados ANTES de qualquer import
+v5_dir = os.path.dirname(os.path.abspath(__file__))
+if v5_dir not in sys.path:
+    sys.path.insert(0, v5_dir)
+
+# Remove caminhos que possam causar conflito
+sys.path = [p for p in sys.path if 'site-packages' not in p or 'streamlit' in p]
+sys.path.insert(0, v5_dir)
 
 from engine_core import (
     STEP_REGISTRY, DEZENAS, PipelineExecutor,
