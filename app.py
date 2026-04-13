@@ -617,7 +617,7 @@ with tabs[1]:
         df_cic = pd.DataFrame(ciclos_l)
         df_comp = df_at.merge(df_cic, on="Dezena")
         df_comp["Status"] = df_comp["Atraso"].apply(lambda a: classificar_atraso(a, percentis))
-        st.dataframe(df_comp.sort_values("Atraso", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(df_comp.sort_values("Atraso", ascending=False).reset_index(drop=True), use_container_width=True, hide_index=True, column_config={"Dezena": st.column_config.NumberColumn("Dezena"), "Atraso": st.column_config.NumberColumn("Atraso ↓")})
 
         vencidas  = df_comp[df_comp["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
         no_ciclo  = df_comp[df_comp["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
