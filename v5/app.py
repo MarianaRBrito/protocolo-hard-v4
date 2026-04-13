@@ -83,23 +83,14 @@ def carregar_base():
         "base_lotofacil.csv",
         "../base_lotofacil.csv",
         os.path.join(os.path.dirname(__file__), "..", "base_lotofacil.csv"),
+        "/mount/src/protocolo-hard-v4/base_lotofacil.csv",
     ]
     for caminho in caminhos:
         if os.path.exists(caminho):
             df = pd.read_csv(caminho)
             return df.sort_values("Concurso").reset_index(drop=True)
-    # Fallback mock
-    st.warning("⚠️ base_lotofacil.csv não encontrado — usando dados simulados.")
-    np.random.seed(0)
-    sorteios_mock = [sorted(np.random.choice(range(1,26), 15, replace=False).tolist())
-                     for _ in range(600)]
-    rows = []
-    for i, s in enumerate(sorteios_mock):
-        row = {"Concurso": 1000+i, "Data": f"2020-{(i%12)+1:02d}-01"}
-        for j, n in enumerate(s):
-            row[f"bola {j+1}"] = n
-        rows.append(row)
-    return pd.DataFrame(rows)
+    st.error("❌ base_lotofacil.csv não encontrado!")
+    st.stop()
 
 @st.cache_data
 def extrair_sorteios(df):
