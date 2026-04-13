@@ -128,6 +128,7 @@ init_state()
 df       = carregar_base()
 sorteios = extrair_sorteios(df)
 n_conc   = len(sorteios)
+st.sidebar.success(f"✅ Base carregada: {n_conc} concursos | C{df['Concurso'].max()}")
 
 # =============================================================================
 # SIDEBAR
