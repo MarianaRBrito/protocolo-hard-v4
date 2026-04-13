@@ -514,6 +514,7 @@ with tabs[0]:
     st.header("1️⃣ Térmica — Frequência & Temperatura")
     if etapa_ok("termica"):
         st.success("✅ Etapa concluída — dados salvos no protocolo.")
+        st.success(f"▶️ Próxima etapa: **2️⃣ Atraso & Ciclo** — clique na aba acima")
         d = st.session_state["analise"]["termica"]
         st.write(f"🔥 Quentes top 10: **{' '.join(str(n).zfill(2) for n in d['quentes'])}**")
         st.write(f"🧊 Frias top 5: **{' '.join(str(n).zfill(2) for n in d['frias'])}**")
@@ -567,6 +568,7 @@ with tabs[1]:
     elif etapa_ok("atraso"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["atraso"]
+        st.success(f"▶️ Próxima etapa: **3️⃣ Estrutural** — clique na aba acima")
         st.write(f"🔴 Vencidas (prioridade máxima): **{' '.join(str(n).zfill(2) for n in d['vencidas'])}**")
         st.write(f"🟡 No ciclo: **{' '.join(str(n).zfill(2) for n in d['no_ciclo'])}**")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 3")
@@ -619,6 +621,7 @@ with tabs[2]:
     elif etapa_ok("estrutural"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["estrutural"]
+        st.success(f"▶️ Próxima etapa: **4️⃣ Composição** — clique na aba acima")
         st.write(f"Soma: **{d['soma_min']}–{d['soma_max']}** (média {d['soma_med']})")
         st.write(f"Pares mais freq: **{d['top_pares']}** ({d['pct_top_pares']}%)")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 4")
@@ -673,6 +676,7 @@ with tabs[3]:
     elif etapa_ok("composicao"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["composicao"]
+        st.success(f"▶️ Próxima etapa: **5️⃣ Sequências** — clique na aba acima")
         st.write(f"Primos mais freq: **{d['top_primo']}** | Fibonacci: **{d['top_fib']}**")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 5")
         if st.button("🔄 Refazer Etapa 4"):
@@ -736,6 +740,7 @@ with tabs[4]:
     elif etapa_ok("sequencias"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["sequencias"]
+        st.success(f"▶️ Próxima etapa: **6️⃣ N+1/N+2** — clique na aba acima")
         st.write(f"Consecutivos mais comuns: **{d['top_consec']}** ({d['pct_consec']}%)")
         st.write(f"Gap mais comum: **{d['top_gap']}** ({d['pct_gap']}%)")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 6")
@@ -786,6 +791,7 @@ with tabs[5]:
     elif etapa_ok("n12"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["n12"]
+        st.success(f"▶️ Próxima etapa: **7️⃣ Coocorrência** — clique na aba acima")
         st.write(f"Concursos similares: **{len(d['similares'])}**")
         st.write(f"🔥 Fortes: **{' '.join(str(n).zfill(2) for n in sorted(d['fortes']))}**")
         st.write(f"🤝 Apoio: **{' '.join(str(n).zfill(2) for n in sorted(d['apoio']))}**")
@@ -860,6 +866,7 @@ with tabs[6]:
     elif etapa_ok("coocorrencia"):
         st.success("✅ Etapa concluída.")
         d = st.session_state["analise"]["coocorrencia"]
+        st.success(f"▶️ Próxima etapa: **8️⃣ Monte Carlo** — clique na aba acima")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 8")
         if st.button("🔄 Refazer Etapa 7"):
             for e in ETAPAS[6:]:
@@ -943,6 +950,7 @@ with tabs[7]:
     elif etapa_ok("monte_carlo"):
         st.success("✅ Etapa concluída — Protocolo pronto para gerar!")
         d = st.session_state["analise"]["monte_carlo"]
+        st.success(f"▶️ Próxima etapa: **🏆 Relatório** — clique na aba acima")
         st.write(f"χ²={d['chi2']} | p={d['p_valor']} | Base: {'✅ OK' if d['base_ok'] else '⚠️ Desvio'}")
         st.write(f"Pool final: **{' '.join(str(n).zfill(2) for n in d['pool_final'])}** ({len(d['pool_final'])} dezenas)")
         if st.button("🔄 Refazer Etapa 8"):
