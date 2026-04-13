@@ -627,7 +627,8 @@ with tabs[1]:
             st.info(f"ℹ️ Nenhuma dezena vencida (P95≥{percentis['p95']}). Atrasadas (P75≥{percentis['p75']}): **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
         if atrasadas and not vencidas:
             st.warning(f"🟠 Atrasadas entram com prioridade elevada: **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
-        st.warning(f"🟡 No ciclo (alta prioridade): **{' '.join(str(n).zfill(2) for n in no_ciclo)}**")
+        if no_ciclo:
+            st.warning(f"🟡 No ciclo (alta prioridade): **{' '.join(str(n).zfill(2) for n in no_ciclo)}**")
 
         # Candidatas = e1 + vencidas (vencidas entram mesmo que não estejam nas quentes)
         # Se não há vencidas, atrasadas assumem prioridade máxima
