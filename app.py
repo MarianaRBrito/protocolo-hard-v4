@@ -596,8 +596,10 @@ with tabs[1]:
         d = st.session_state["analise"]["atraso"]
         st.success("✅ Etapa 2 concluída!")
         st.info("👆 Clique na aba **3️⃣ Estrutural** acima para continuar")
-        st.write(f"🔴 Vencidas (prioridade máxima): **{' '.join(str(n).zfill(2) for n in d['vencidas'])}**")
-        st.write(f"🟡 No ciclo: **{' '.join(str(n).zfill(2) for n in d['no_ciclo'])}**")
+        if d.get("vencidas"):   st.error(f"🔴 Vencidas: **{' '.join(str(n).zfill(2) for n in d['vencidas'])}**")
+        if d.get("no_ciclo"):   st.warning(f"🟡 No ciclo: **{' '.join(str(n).zfill(2) for n in d['no_ciclo'])}**")
+        if d.get("atrasadas"):  st.warning(f"🟠 Atrasadas: **{' '.join(str(n).zfill(2) for n in d['atrasadas'])}**")
+        st.info(f"🎯 Prioridade máxima: **{' '.join(str(n).zfill(2) for n in d.get('prioridade',[]))}**")
         st.write(f"➡️ **{len(d['candidatas'])} dezenas candidatas** passam para Etapa 3")
         if st.button("🔄 Refazer Etapa 2"):
             for e in ETAPAS[1:]:
@@ -617,29 +619,52 @@ with tabs[1]:
         df_comp["Status"] = df_comp["Atraso"].apply(lambda a: classificar_atraso(a, percentis))
         st.dataframe(df_comp.sort_values("Atraso", ascending=False), use_container_width=True, hide_index=True)
 
-        vencidas = df_comp[df_comp["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
-        no_ciclo = df_comp[df_comp["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
-
+        vencidas  = df_comp[df_comp["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
+        no_ciclo  = df_comp[df_comp["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
         atrasadas = df_comp[df_comp["Status"]=="🟠 Atrasada"]["Dezena"].tolist()
-        if vencidas:
-            st.error(f"🔴 Vencidas (≥{percentis['p95']} conc.): **{' '.join(str(n).zfill(2) for n in vencidas)}**")
-        else:
-            st.info(f"ℹ️ Nenhuma dezena vencida (P95≥{percentis['p95']}). Atrasadas (P75≥{percentis['p75']}): **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
-        if atrasadas and not vencidas:
-            st.warning(f"🟠 Atrasadas entram com prioridade elevada: **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
-        if no_ciclo:
-            st.warning(f"🟡 No ciclo (alta prioridade): **{' '.join(str(n).zfill(2) for n in no_ciclo)}**")
 
-        # Candidatas = e1 + vencidas (vencidas entram mesmo que não estejam nas quentes)
-        # Se não há vencidas, atrasadas assumem prioridade máxima
-        prioridade = vencidas if vencidas else atrasadas
-        candidatas_e2 = list(dict.fromkeys(candidatas_e1 + prioridade + no_ciclo[:3]))
+        # Top 5 com maior atraso — sempre mostra independente do threshold
+        top5_atraso = df_comp.sort_values("Atraso", ascending=False).head(5)["Dezena"].tolist()
+
+        # Apresentação por prioridade — sempre mostra algo útil
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Pressão de retorno (maior atraso):**")
+            for _, row in df_comp.sort_values("Atraso", ascending=False).head(8).iterrows():
+                n = int(row["Dezena"]); at = int(row["Atraso"]); st_label = row["Status"]
+                st.write(f"{st_label} **{n:02d}** — {at} conc. sem sair")
+        with col_b:
+            st.markdown("**Resumo por categoria:**")
+            if vencidas:
+                st.error(f"🔴 Vencidas: **{' '.join(str(n).zfill(2) for n in vencidas)}**")
+            if no_ciclo:
+                st.warning(f"🟡 No ciclo: **{' '.join(str(n).zfill(2) for n in no_ciclo)}**")
+            if atrasadas:
+                st.warning(f"🟠 Atrasadas: **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
+            if not vencidas and not no_ciclo and not atrasadas:
+                st.info("Todas as dezenas saíram recentemente — usando top 5 por atraso como prioridade")
+            st.info(f"🎯 **Top 5 maior pressão:** {' '.join(str(n).zfill(2) for n in top5_atraso)}")
+
+        # Prioridade para o pool:
+        # 1º Vencidas, 2º No ciclo, 3º Atrasadas, 4º Top 5 por atraso (fallback)
+        if vencidas:
+            prioridade = vencidas
+        elif no_ciclo:
+            prioridade = no_ciclo + atrasadas
+        elif atrasadas:
+            prioridade = atrasadas
+        else:
+            prioridade = top5_atraso
+
+        candidatas_e2 = list(dict.fromkeys(candidatas_e1 + prioridade))
         st.info(f"➡️ **{len(candidatas_e2)} dezenas candidatas** para Etapa 3: {' '.join(str(n).zfill(2) for n in candidatas_e2)}")
 
         if st.button("✅ Confirmar Etapa 2 — Atraso & Ciclo", type="primary"):
             salvar_etapa("atraso", {
                 "df_completo": df_comp, "vencidas": vencidas,
-                "no_ciclo": no_ciclo, "candidatas": candidatas_e2
+                "no_ciclo": no_ciclo, "atrasadas": atrasadas,
+                "top5_atraso": top5_atraso, "prioridade": prioridade,
+                "candidatas": candidatas_e2
             }, pipeline_update=candidatas_e2)
             for e in ETAPAS[2:]:
                 st.session_state["analise"][e] = None
