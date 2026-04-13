@@ -123,6 +123,29 @@ def calcular_atrasos(sorteios):
         res.append({"Dezena":n,"Último":idx+1,"Atraso":total-1-idx if idx>=0 else total})
     return pd.DataFrame(res).sort_values("Atraso",ascending=False)
 
+@st.cache_data
+def calcular_percentis_atraso(sorteios_tuple):
+    """Calcula percentis históricos reais de atraso entre aparições."""
+    sorteios = list(sorteios_tuple)
+    todos = []
+    for n in range(1,26):
+        ap = [i for i,s in enumerate(sorteios) if n in s]
+        for k in range(1,len(ap)):
+            todos.append(ap[k]-ap[k-1])
+    return {
+        "p75": int(np.percentile(todos,75)),
+        "p85": int(np.percentile(todos,85)),
+        "p90": int(np.percentile(todos,90)),
+        "p95": int(np.percentile(todos,95)),
+    }
+
+def classificar_atraso(atraso, percentis):
+    """Classifica atraso baseado nos percentis históricos reais."""
+    if atraso >= percentis["p95"]:   return "🔴 VENCIDA"
+    elif atraso >= percentis["p85"]: return "🟡 No ciclo"
+    elif atraso >= percentis["p75"]: return "🟠 Atrasada"
+    else:                            return "🟢 Ok"
+
 def ciclo_medio(sorteios, dezena):
     ap = [i for i,s in enumerate(sorteios) if dezena in s]
     if len(ap)<2: return None
@@ -584,27 +607,32 @@ with tabs[1]:
         candidatas_e1 = st.session_state["pipeline"]
         st.info(f"Entrada da Etapa 1: **{' '.join(str(n).zfill(2) for n in candidatas_e1)}**")
 
-        # Histórico completo para atraso/ciclo — janela não afeta vencidas
+        # Percentis históricos reais — não depende da janela nem do ciclo médio
+        percentis = calcular_percentis_atraso(st_tuple)
+        st.caption(f"Limites históricos: Atrasada≥{percentis['p75']} | No ciclo≥{percentis['p85']} | Vencida≥{percentis['p95']} concursos sem sair")
         df_at = calcular_atrasos(sorteios)
         ciclos_l = [{"Dezena":n,"Ciclo Médio":ciclo_medio(sorteios,n)} for n in range(1,26)]
         df_cic = pd.DataFrame(ciclos_l)
         df_comp = df_at.merge(df_cic, on="Dezena")
-        df_comp["Status"] = df_comp.apply(
-            lambda r: "🔴 VENCIDA" if r["Atraso"] > (r["Ciclo Médio"] or 2.5)*1.5
-            else ("🟡 No ciclo" if r["Atraso"] > (r["Ciclo Médio"] or 2.5)*0.8 else "🟢 Ok"), axis=1)
+        df_comp["Status"] = df_comp["Atraso"].apply(lambda a: classificar_atraso(a, percentis))
         st.dataframe(df_comp.sort_values("Atraso", ascending=False), use_container_width=True, hide_index=True)
 
         vencidas = df_comp[df_comp["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
         no_ciclo = df_comp[df_comp["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
 
+        atrasadas = df_comp[df_comp["Status"]=="🟠 Atrasada"]["Dezena"].tolist()
         if vencidas:
-            st.error(f"🔴 Vencidas (entram OBRIGATORIAMENTE no pool): **{' '.join(str(n).zfill(2) for n in vencidas)}**")
+            st.error(f"🔴 Vencidas (≥{percentis['p95']} conc.): **{' '.join(str(n).zfill(2) for n in vencidas)}**")
         else:
-            st.warning(f"⚠️ Nenhuma dezena vencida no momento — todas saíram recentemente. Verifique se a base está atualizada (último concurso: C{df['Concurso'].max()})")
+            st.info(f"ℹ️ Nenhuma dezena vencida (P95≥{percentis['p95']}). Atrasadas (P75≥{percentis['p75']}): **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
+        if atrasadas and not vencidas:
+            st.warning(f"🟠 Atrasadas entram com prioridade elevada: **{' '.join(str(n).zfill(2) for n in atrasadas)}**")
         st.warning(f"🟡 No ciclo (alta prioridade): **{' '.join(str(n).zfill(2) for n in no_ciclo)}**")
 
         # Candidatas = e1 + vencidas (vencidas entram mesmo que não estejam nas quentes)
-        candidatas_e2 = list(dict.fromkeys(candidatas_e1 + vencidas + no_ciclo[:3]))
+        # Se não há vencidas, atrasadas assumem prioridade máxima
+        prioridade = vencidas if vencidas else atrasadas
+        candidatas_e2 = list(dict.fromkeys(candidatas_e1 + prioridade + no_ciclo[:3]))
         st.info(f"➡️ **{len(candidatas_e2)} dezenas candidatas** para Etapa 3: {' '.join(str(n).zfill(2) for n in candidatas_e2)}")
 
         if st.button("✅ Confirmar Etapa 2 — Atraso & Ciclo", type="primary"):
@@ -1147,9 +1175,8 @@ with tabs[13]:
                 df_at_a=calcular_atrasos(sorteios)
                 cl_a=[{"Dezena":n,"Ciclo Médio":ciclo_medio(sorteios,n)} for n in range(1,26)]
                 df_c_a=df_at_a.merge(pd.DataFrame(cl_a),on="Dezena")
-                df_c_a["Status"]=df_c_a.apply(
-                    lambda r:"🔴 VENCIDA" if r["Atraso"]>(r["Ciclo Médio"] or 2.5)*1.5
-                    else("🟡 No ciclo" if r["Atraso"]>(r["Ciclo Médio"] or 2.5)*0.8 else "🟢 Ok"),axis=1)
+                perc_a=calcular_percentis_atraso(st_tuple)
+                df_c_a["Status"]=df_c_a["Atraso"].apply(lambda a: classificar_atraso(a, perc_a))
                 ven_a=df_c_a[df_c_a["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
                 noc_a=df_c_a[df_c_a["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
                 cand2=list(dict.fromkeys(cand1+ven_a+noc_a[:3]))
