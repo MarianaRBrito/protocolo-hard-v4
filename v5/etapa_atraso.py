@@ -497,6 +497,7 @@ def executar_etapa_atraso(
 
         # Salva resultado completo
         executor.ctx["resultados"]["_atraso_completo"] = resultado
+        executor.ctx["resultados"]["_sorteios_recentes"] = sorteios
 
         executor._log("[ATRASO] Etapa de atraso & ciclo executada com sucesso.")
         return resultado
