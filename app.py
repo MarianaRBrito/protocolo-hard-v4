@@ -887,14 +887,87 @@ with tabs[10]:
     dezena_tend = st.selectbox("Dezena:", range(1,26), key="tend")
     df_tend = tendencia_dezena(dezena_tend, sorteios)
     st.dataframe(df_tend, use_container_width=True, hide_index=True)
-    taxa_50  = df_tend[df_tend["Janela"]==50]["Freq"].values[0] / 50
+
+    # Comparação multi-janela — threshold calibrado para Lotofácil
+    # Na Lotofácil cada dezena sai ~60% dos concursos
+    # Variação relevante = diferença absoluta > 5pp entre janelas
+    taxa_20  = df_tend[df_tend["Janela"]==20]["Freq"].values[0]  / 20
+    taxa_50  = df_tend[df_tend["Janela"]==50]["Freq"].values[0]  / 50
+    taxa_100 = df_tend[df_tend["Janela"]==100]["Freq"].values[0] / 100
     taxa_200 = df_tend[df_tend["Janela"]==200]["Freq"].values[0] / 200
-    if taxa_50 > taxa_200*1.2:
-        st.success(f"🔼 Dezena {dezena_tend:02d} em ALTA")
-    elif taxa_50 < taxa_200*0.8:
-        st.warning(f"🔽 Dezena {dezena_tend:02d} em BAIXA")
+
+    esperado = 15/25  # 60% — frequência esperada por concurso
+
+    # Tendência de curto prazo vs longo prazo (diferença absoluta)
+    diff_curto_longo = taxa_20 - taxa_200
+    diff_medio_longo = taxa_50 - taxa_200
+
+    # Posição relativa à frequência esperada
+    acima_esperado = taxa_50 > esperado * 1.05
+    abaixo_esperado = taxa_50 < esperado * 0.95
+
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        st.write(f"**Taxa esperada:** {esperado*100:.1f}%")
+        st.write(f"**Janela 20:** {taxa_20*100:.1f}% | **Janela 50:** {taxa_50*100:.1f}%")
+        st.write(f"**Janela 100:** {taxa_100*100:.1f}% | **Janela 200:** {taxa_200*100:.1f}%")
+    with col_t2:
+        st.write(f"**Δ curto/longo (20 vs 200):** {diff_curto_longo*100:+.1f}pp")
+        st.write(f"**Δ médio/longo (50 vs 200):** {diff_medio_longo*100:+.1f}pp")
+
+    # Classificação com threshold calibrado (5pp)
+    THRESHOLD = 0.05
+    if diff_curto_longo > THRESHOLD and diff_medio_longo > 0:
+        st.success(f"🔼 Dezena {dezena_tend:02d} em **ALTA** — frequência crescendo nas janelas recentes (+{diff_curto_longo*100:.1f}pp vs longo prazo)")
+    elif diff_curto_longo < -THRESHOLD and diff_medio_longo < 0:
+        st.warning(f"🔽 Dezena {dezena_tend:02d} em **BAIXA** — frequência caindo nas janelas recentes ({diff_curto_longo*100:.1f}pp vs longo prazo)")
+    elif acima_esperado:
+        st.success(f"🟢 Dezena {dezena_tend:02d} **ACIMA da média** — {taxa_50*100:.1f}% vs esperado {esperado*100:.1f}%")
+    elif abaixo_esperado:
+        st.warning(f"🟡 Dezena {dezena_tend:02d} **ABAIXO da média** — {taxa_50*100:.1f}% vs esperado {esperado*100:.1f}%")
     else:
-        st.info(f"➡️ Dezena {dezena_tend:02d} ESTÁVEL")
+        st.info(f"➡️ Dezena {dezena_tend:02d} **ESTÁVEL** — variação dentro do esperado ({taxa_50*100:.1f}% ≈ {esperado*100:.1f}%)")
+
+    # Tabela de todas as dezenas com classificação
+    st.subheader("📊 Classificação de todas as dezenas")
+    rows_all = []
+    for n in range(1, 26):
+        df_n = tendencia_dezena(n, sorteios)
+        t20  = df_n[df_n["Janela"]==20]["Freq"].values[0]  / 20
+        t50  = df_n[df_n["Janela"]==50]["Freq"].values[0]  / 50
+        t100 = df_n[df_n["Janela"]==100]["Freq"].values[0] / 100
+        t200 = df_n[df_n["Janela"]==200]["Freq"].values[0] / 200
+        d_cl = t20 - t200
+        d_ml = t50 - t200
+        if d_cl > THRESHOLD and d_ml > 0:
+            status = "🔼 ALTA"
+        elif d_cl < -THRESHOLD and d_ml < 0:
+            status = "🔽 BAIXA"
+        elif t50 > esperado * 1.05:
+            status = "🟢 ACIMA"
+        elif t50 < esperado * 0.95:
+            status = "🟡 ABAIXO"
+        else:
+            status = "➡️ ESTÁVEL"
+        rows_all.append({
+            "Dezena": n,
+            "J20 %": round(t20*100,1),
+            "J50 %": round(t50*100,1),
+            "J100 %": round(t100*100,1),
+            "J200 %": round(t200*100,1),
+            "Δ (20-200)": f"{d_cl*100:+.1f}pp",
+            "Status": status
+        })
+    df_all_tend = pd.DataFrame(rows_all)
+    st.dataframe(df_all_tend, use_container_width=True, hide_index=True)
+
+    # Resumo rápido
+    altas  = [r["Dezena"] for r in rows_all if "ALTA"  in r["Status"]]
+    baixas = [r["Dezena"] for r in rows_all if "BAIXA" in r["Status"]]
+    acimas = [r["Dezena"] for r in rows_all if "ACIMA" in r["Status"]]
+    if altas:  st.success(f"🔼 Em ALTA: {' '.join(str(n).zfill(2) for n in altas)}")
+    if baixas: st.warning(f"🔽 Em BAIXA: {' '.join(str(n).zfill(2) for n in baixas)}")
+    if acimas: st.info(f"🟢 Acima da média: {' '.join(str(n).zfill(2) for n in acimas)}")
 
 # ──────────────────────────────────────────────────────────────
 # ABA 11 — VALOR ESPERADO
@@ -1078,13 +1151,34 @@ with tabs[12]:
             scores, _sim, _fortes, _apoio = calcular_scores_completo(
                 sorteios, janela_analise, concurso_ref, threshold_sim, perfil["pesos"], analise)
 
-            ranking_ord   = sorted(scores.items(), key=lambda x: -x[1])
-            pool_dinamico = max(perfil["top_pool"], min(qtd_jogos+5, 25))
+            ranking_ord = sorted(scores.items(), key=lambda x: -x[1])
+
+            # ── Pool dinâmico por perfil ─────────────────────
+            # AGRESSIVA: começa no top_pool estrito (15)
+            #   — só expande se travar, nunca de cara
+            #   — garante que o sinal mais forte domina
+            # HÍBRIDA: começa maior para garantir cobertura
+            if "Agressiva" in perfil_nome:
+                # Pool fixo no início — expande só se travar
+                pool_dinamico = perfil["top_pool"]  # 15
+                pool_max_inicial = min(perfil["top_pool"] + 3, 25)  # nunca passa de 18 de cara
+            else:
+                # Híbrida começa maior para cobrir mais jogos
+                pool_dinamico = max(perfil["top_pool"], min(qtd_jogos + 3, 25))
+                pool_max_inicial = 25
+
             pool = [n for n,_ in ranking_ord[:pool_dinamico]]
             for f in fixas:
                 if f not in pool: pool.append(f)
 
-            st.write(f"**Pool ({len(pool)} dez):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
+            # Exibe pool inicial com score de cada dezena
+            st.write(f"**Pool inicial ({len(pool)} dez — top scores):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
+            with st.expander("📊 Score do pool"):
+                df_pool = pd.DataFrame([
+                    {"Dezena": n, "Score": round(scores[n],4), "Rank": i+1}
+                    for i,(n,_) in enumerate(ranking_ord) if n in pool
+                ])
+                st.dataframe(df_pool.sort_values("Score", ascending=False), use_container_width=True, hide_index=True)
 
             jogos_gerados  = []
             tentativas_total = 0
@@ -1102,8 +1196,10 @@ with tabs[12]:
                     travamentos += 1
                     ultimo_gerado = tentativas_total
                     max_comum_atual = min(perfil["max_comum"]+travamentos, 13)
-                    if pool_dinamico < 25:
-                        pool_dinamico = min(pool_dinamico+2, 25)
+                    if pool_dinamico < pool_max_inicial:
+                        # Agressiva: expande devagar (+1), Híbrida: expande mais (+2)
+                        incremento = 1 if "Agressiva" in perfil_nome else 2
+                        pool_dinamico = min(pool_dinamico + incremento, pool_max_inicial)
                         pool = [n for n,_ in ranking_ord[:pool_dinamico]]
                         for f in fixas:
                             if f not in pool: pool.append(f)
