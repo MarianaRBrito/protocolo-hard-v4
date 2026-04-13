@@ -120,237 +120,280 @@ def filtrar_jogo(jogo: list, cfg: dict) -> list:
     return erros
 
 # =============================================================================
-# CAMADA A — ESTRATÉGIAS DE GERAÇÃO
+# CAMADA A — GERAÇÃO ORIENTADA A TEMPLATE ESTRUTURAL
+# =============================================================================
+# Filosofia: cada jogo é construído do zero seguindo um template
+# extraído dos sorteios históricos reais. O score por dezena pondera
+# qual dezena entra em cada slot — mas a ESTRUTURA vem do histórico.
+# Isso elimina o viés de pool e garante jogos com perfil real.
 # =============================================================================
 
+MIOLO   = {7, 8, 9, 12, 13, 14, 17, 18, 19}
+MOLDURA = {1, 2, 3, 4, 5, 6, 10, 11, 15, 16, 20, 21, 22, 23, 24, 25}
+FAIXAS_DEF = [list(range(i*5+1, i*5+6)) for i in range(5)]
+
+
+def _extrair_templates(sorteios: list, janela: int = 200) -> list:
+    """
+    Extrai perfis estruturais dos sorteios históricos recentes.
+    Cada template = distribuição de faixas + n_miolo + n_pares + soma.
+    """
+    dados = sorteios[-janela:]
+    templates = []
+    for s in dados:
+        templates.append({
+            "faixas":  _dist_faixas(s),
+            "n_miolo": len(set(s) & MIOLO),
+            "n_pares": sum(1 for n in s if n % 2 == 0),
+            "soma":    sum(s),
+        })
+    return templates
+
+
+def _construir_por_template(
+    template: dict,
+    scores: dict,
+    fixas: list,
+    cfg: dict,
+    max_tentativas: int = 200,
+) -> list:
+    """
+    Constrói um jogo seguindo exatamente o template estrutural.
+    Para cada faixa, sorteia o número de dezenas definido no template,
+    ponderado pelo score de cada dezena.
+    """
+    for _ in range(max_tentativas):
+        base = list(fixas)
+        ok = True
+
+        for fi, faixa in enumerate(FAIXAS_DEF):
+            n_alvo = template["faixas"][fi]
+            # Quantas já temos dessa faixa pelas fixas
+            ja_tem = sum(1 for d in base if d in faixa)
+            faltam = n_alvo - ja_tem
+            if faltam <= 0:
+                continue
+
+            candidatos = [d for d in faixa if d not in base]
+            if len(candidatos) < faltam:
+                ok = False
+                break
+
+            sc = np.array([max(scores.get(d, 0.01), 0.01) for d in candidatos])
+            sc /= sc.sum()
+            escolhidos = list(np.random.choice(candidatos, size=faltam,
+                                                replace=False, p=sc))
+            base.extend(escolhidos)
+
+        if not ok or len(base) != 15:
+            continue
+
+        jogo = sorted(set(base))
+        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
+            return jogo
+
+    return []
+
+
 def _sortear_ponderado(pool: list, scores: dict, n: int, fixas: list = None) -> list:
-    """Sorteia n dezenas do pool ponderado pelo score."""
+    """Sorteia n dezenas do pool ponderado pelo score — usado como fallback."""
     fixas = fixas or []
-    base = [d for d in fixas if d in pool][:n]
-    rest = [d for d in pool if d not in base]
+    base  = [d for d in fixas if d in pool][:n]
+    rest  = [d for d in pool if d not in base]
     faltam = n - len(base)
     if faltam <= 0:
         return sorted(base[:n])
     if len(rest) < faltam:
-        # Expande para todo o universo se pool insuficiente
         rest = [d for d in DEZENAS if d not in base]
 
-    sc_arr = np.array([max(scores.get(d, 0.01), 0.01) for d in rest[:faltam+15]])
+    sc_arr = np.array([max(scores.get(d, 0.01), 0.01) for d in rest])
     sc_arr = sc_arr / sc_arr.sum()
-    escolhidos = list(np.random.choice(
-        rest[:faltam+15], size=min(faltam, len(rest[:faltam+15])),
-        replace=False, p=sc_arr
-    ))
+    escolhidos = list(np.random.choice(rest, size=min(faltam, len(rest)),
+                                        replace=False, p=sc_arr))
     return sorted(base + escolhidos)
 
 
-def gerar_agressiva(scores: dict, pool: list, fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Pool restrito ao top do score consolidado."""
+def gerar_por_templates(
+    scores: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+    janela: int = 200,
+    sc_ajuste: dict = None,
+) -> list:
+    """
+    Estratégia principal: usa templates históricos reais como molde.
+    Para cada jogo, sorteia um template dos últimos `janela` concursos
+    e constrói o jogo seguindo aquela estrutura.
+    """
+    templates = _extrair_templates(sorteios, janela)
+    sc_uso = sc_ajuste or scores
     jogos = []
-    pool_top = sorted(pool, key=lambda d: -scores.get(d, 0))[:max(18, len(fixas)+5)]
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        jogo = _sortear_ponderado(pool_top, scores, 15, fixas)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
+    tentativas = 0
+    max_t = n_jogos * 500
+
+    while len(jogos) < n_jogos and tentativas < max_t:
+        tentativas += 1
+        tmpl = random.choice(templates)
+        jogo = _construir_por_template(tmpl, sc_uso, fixas, cfg)
+        if jogo and jogo not in jogos:
+            jogos.append(jogo)
+
     return jogos
 
 
-def gerar_hibrida(scores: dict, scores_atraso: dict, pool: list, fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Combina score consolidado + pressão de atraso."""
-    sc_hib = {d: scores.get(d, 0) * 0.6 + scores_atraso.get(d, 0) * 0.4 for d in DEZENAS}
-    sc_hib = normalizar(sc_hib)
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        jogo = _sortear_ponderado(pool, sc_hib, 15, fixas)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
+def gerar_template_atraso(
+    scores: dict,
+    scores_atraso: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """Template + bônus de atraso: dezenas atrasadas recebem peso maior."""
+    sc_adj = {d: scores.get(d, 0.5) * 0.5 + scores_atraso.get(d, 0.5) * 0.5
+              for d in DEZENAS}
+    sc_adj = normalizar(sc_adj)
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 
-def gerar_equilibrada(scores: dict, pool: list, fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Garante ao menos 2 dezenas por faixa."""
-    faixas_def = [list(range(i*5+1, i*5+6)) for i in range(5)]
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        # Seleciona ao menos 2 por faixa
-        base = list(fixas)
-        for faixa in faixas_def:
-            faixa_pool = [d for d in faixa if d in pool and d not in base]
-            if not faixa_pool:
-                faixa_pool = faixa
-            sc_f = np.array([max(scores.get(d, 0.01), 0.01) for d in faixa_pool])
-            sc_f = sc_f / sc_f.sum()
-            n_sel = max(2, sum(1 for d in base if d in faixa))
-            n_falt = max(0, n_sel - sum(1 for d in base if d in faixa))
-            if n_falt > 0 and len(faixa_pool) >= n_falt:
-                escolhidos = list(np.random.choice(faixa_pool, size=min(n_falt, len(faixa_pool)),
-                                                    replace=False, p=sc_f[:len(faixa_pool)]/sc_f[:len(faixa_pool)].sum()))
-                base.extend(escolhidos)
-
-        # Completa até 15
-        rest = [d for d in pool if d not in base]
-        if not rest:
-            rest = [d for d in DEZENAS if d not in base]
-        faltam = 15 - len(base)
-        if faltam > 0 and len(rest) >= faltam:
-            sc_r = np.array([max(scores.get(d, 0.01), 0.01) for d in rest])
-            sc_r = sc_r / sc_r.sum()
-            extra = list(np.random.choice(rest, size=faltam, replace=False, p=sc_r))
-            base.extend(extra)
-
-        jogo = sorted(set(base))[:15]
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
+def gerar_template_miolo(
+    scores: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """Template com bônus explícito para dezenas do miolo."""
+    sc_adj = {}
+    for d in DEZENAS:
+        bonus = 1.8 if d in MIOLO else 0.7
+        sc_adj[d] = scores.get(d, 0.5) * bonus
+    sc_adj = normalizar(sc_adj)
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 
-def gerar_cobertura(scores: dict, pool: list, fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Maximiza dezenas distintas cobertas entre os jogos."""
-    jogos = []
-    cobertas = set(fixas)
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        # Prioriza dezenas ainda não cobertas
-        nao_cobertas = [d for d in pool if d not in cobertas]
-        sc_cob = {}
-        for d in pool:
-            bonus = 2.0 if d in nao_cobertas else 0.5
-            sc_cob[d] = scores.get(d, 0.5) * bonus
-        sc_cob = normalizar(sc_cob)
-        jogo = _sortear_ponderado(pool, sc_cob, 15, fixas)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-                cobertas.update(jogo)
-    return jogos
+def gerar_template_cooc(
+    scores: dict,
+    cooc_scores: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """Template + coocorrência: dezenas que saem juntas ficam mais prováveis."""
+    sc_adj = {d: scores.get(d, 0.5) * 0.4 + cooc_scores.get(d, 0.5) * 0.6
+              for d in DEZENAS}
+    sc_adj = normalizar(sc_adj)
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 
-def gerar_pressao(scores: dict, vencidas: list, atrasadas: list, pool: list,
-                   fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Prioriza dezenas vencidas e atrasadas."""
-    sc_press = {}
+def gerar_template_pressao(
+    scores: dict,
+    vencidas: list,
+    atrasadas: list,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """Template + pressão máxima para vencidas/atrasadas."""
+    sc_adj = {}
     for d in DEZENAS:
         if d in vencidas:
-            sc_press[d] = scores.get(d, 0.5) * 3.0
+            sc_adj[d] = scores.get(d, 0.5) * 3.5
         elif d in atrasadas:
-            sc_press[d] = scores.get(d, 0.5) * 2.0
+            sc_adj[d] = scores.get(d, 0.5) * 2.0
         else:
-            sc_press[d] = scores.get(d, 0.5)
-    sc_press = normalizar(sc_press)
+            sc_adj[d] = scores.get(d, 0.5)
+    sc_adj = normalizar(sc_adj)
 
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        # Garante ao menos 1 vencida (se disponível)
-        base = list(fixas)
-        if vencidas and not any(v in base for v in vencidas):
-            cand_v = [v for v in vencidas if v in pool and v not in base]
-            if cand_v:
-                base.append(random.choice(cand_v))
+    # Garante ao menos 1 vencida nas fixas se possível
+    fixas_ext = list(fixas)
+    if vencidas and not any(v in fixas_ext for v in vencidas):
+        fixas_ext.append(vencidas[0])
 
-        jogo = _sortear_ponderado(pool, sc_press, 15, base)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
+    return gerar_por_templates(scores, sorteios, fixas_ext, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 
-def gerar_estabilidade(scores: dict, scores_termicos: dict, pool: list,
-                        fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Prioriza dezenas termicamente estáveis."""
-    termica = get_scores_termicos  # placeholder — usa scores térmicos passados
-    sc_est = {d: scores.get(d, 0.5) * 0.5 + scores_termicos.get(d, 0.5) * 0.5 for d in DEZENAS}
-    sc_est = normalizar(sc_est)
-
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        jogo = _sortear_ponderado(pool, sc_est, 15, fixas)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
-
-
-def gerar_coocorrencia(scores: dict, cooc_scores: dict, pool: list,
-                        fixas: list, n_jogos: int, cfg: dict, max_tentativas: int = 5000) -> list:
-    """Prioriza dezenas com maior coocorrência."""
-    sc_cooc = {d: scores.get(d, 0.5) * 0.4 + cooc_scores.get(d, 0.5) * 0.6 for d in DEZENAS}
-    sc_cooc = normalizar(sc_cooc)
-
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        jogo = _sortear_ponderado(pool, sc_cooc, 15, fixas)
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
+def gerar_template_n12(
+    scores: dict,
+    fortes_n12: list,
+    apoio_n12: list,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """Template + bônus para dezenas projetadas pelo N+1/N+2."""
+    sc_adj = {}
+    for d in DEZENAS:
+        if d in fortes_n12:
+            sc_adj[d] = scores.get(d, 0.5) * 3.0
+        elif d in apoio_n12:
+            sc_adj[d] = scores.get(d, 0.5) * 1.8
+        else:
+            sc_adj[d] = scores.get(d, 0.5) * 0.6
+    sc_adj = normalizar(sc_adj)
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 
-def gerar_estrutural(scores: dict, pool: list, fixas: list, n_jogos: int,
-                      cfg: dict, max_tentativas: int = 5000) -> list:
-    """Equilibra moldura/miolo, pares/ímpares e soma."""
-    MOLDURA = {1,2,3,4,5,6,10,11,15,16,20,21,22,23,24,25}
-    MIOLO   = {7,8,9,12,13,14,17,18,19}
+def gerar_template_recente(
+    scores: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """
+    Template dos últimos 30 concursos — captura o momento atual
+    com mais precisão que a janela longa.
+    """
+    sc_rec = {}
+    dados_rec = sorteios[-30:]
+    for d in DEZENAS:
+        f_rec = sum(1 for s in dados_rec if d in s) / len(dados_rec)
+        f_lon = sum(1 for s in sorteios[-200:] if d in s) / 200
+        # Bônus para dezenas em alta recente
+        sc_rec[d] = scores.get(d, 0.5) * 0.4 + f_rec * 0.4 + max(0, f_rec - f_lon) * 0.2
+    sc_rec = normalizar(sc_rec)
+    # Usa só os últimos 50 concursos como base de templates
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                janela=50, sc_ajuste=sc_rec)
 
-    jogos = []
-    for _ in range(max_tentativas):
-        if len(jogos) >= n_jogos:
-            break
-        base = list(fixas)
-        # Alvo: ~10 moldura, ~5 miolo
-        n_mold = sum(1 for d in base if d in MOLDURA)
-        n_miol = sum(1 for d in base if d in MIOLO)
-        alvo_mold = 10 - n_mold
-        alvo_miol = 5 - n_miol
 
-        pool_mold = [d for d in pool if d in MOLDURA and d not in base]
-        pool_miol = [d for d in pool if d in MIOLO   and d not in base]
-
-        if pool_mold and alvo_mold > 0:
-            sc_m = np.array([max(scores.get(d, 0.01), 0.01) for d in pool_mold])
-            sc_m /= sc_m.sum()
-            n_sel = min(alvo_mold, len(pool_mold))
-            sel = list(np.random.choice(pool_mold, size=n_sel, replace=False, p=sc_m[:len(pool_mold)]/sc_m[:len(pool_mold)].sum()))
-            base.extend(sel)
-
-        if pool_miol and alvo_miol > 0:
-            sc_mi = np.array([max(scores.get(d, 0.01), 0.01) for d in pool_miol])
-            sc_mi /= sc_mi.sum()
-            n_sel = min(alvo_miol, len(pool_miol))
-            sel = list(np.random.choice(pool_miol, size=n_sel, replace=False, p=sc_mi[:len(pool_miol)]/sc_mi[:len(pool_miol)].sum()))
-            base.extend(sel)
-
-        # Completa
-        rest = [d for d in pool if d not in base]
-        if not rest:
-            rest = [d for d in DEZENAS if d not in base]
-        faltam = 15 - len(base)
-        if faltam > 0 and len(rest) >= faltam:
-            sc_r = np.array([max(scores.get(d, 0.01), 0.01) for d in rest])
-            sc_r /= sc_r.sum()
-            extra = list(np.random.choice(rest, size=faltam, replace=False, p=sc_r))
-            base.extend(extra)
-
-        jogo = sorted(set(base))[:15]
-        if len(jogo) == 15 and not filtrar_jogo(jogo, cfg):
-            if jogo not in jogos:
-                jogos.append(jogo)
-    return jogos
+def gerar_template_anti_vies(
+    scores: dict,
+    sorteios: list,
+    fixas: list,
+    n_jogos: int,
+    cfg: dict,
+) -> list:
+    """
+    Anti-viés: penaliza dezenas que aparecem muito no pool mas
+    saem pouco nos últimos 20 concursos.
+    """
+    dados_rec = sorteios[-20:]
+    sc_adj = {}
+    for d in DEZENAS:
+        f_rec = sum(1 for s in dados_rec if d in s) / len(dados_rec)
+        sc_base = scores.get(d, 0.5)
+        # Penaliza dezenas com score alto mas frequência recente baixa
+        if sc_base > 0.6 and f_rec < 0.5:
+            sc_adj[d] = sc_base * 0.4  # penaliza
+        elif f_rec >= 0.6:
+            sc_adj[d] = sc_base * 1.4  # bônus para quem está saindo
+        else:
+            sc_adj[d] = sc_base
+    sc_adj = normalizar(sc_adj)
+    return gerar_por_templates(scores, sorteios, fixas, n_jogos, cfg,
+                                sc_ajuste=sc_adj)
 
 # =============================================================================
 # CAMADA A — ORQUESTRADOR
@@ -365,8 +408,9 @@ def camada_a_gerar_candidatos(
     seed: int = 0,
 ) -> list:
     """
-    Gera candidatos usando todas as 8 estratégias.
-    Retorna lista de jogos únicos candidatos.
+    Gera candidatos usando 8 estratégias baseadas em templates históricos.
+    Cada estratégia usa o perfil estrutural real dos sorteios como molde
+    e o score por dezena como ponderação interna — eliminando viés de pool.
     """
     if seed > 0:
         random.seed(seed)
@@ -378,37 +422,54 @@ def camada_a_gerar_candidatos(
     scores = executor.score_consolidado()
 
     # Scores por grupo
-    scores_termicos = executor.ctx["scores"].get("frequencia_janelas",
-                      {d: 0.5 for d in DEZENAS})
-    scores_atraso   = executor.ctx["scores"].get("percentis_atraso",
-                      {d: 0.5 for d in DEZENAS})
-    cooc_scores     = executor.ctx["scores"].get("coocorrencia_pares",
-                      {d: 0.5 for d in DEZENAS})
+    scores_atraso = executor.ctx["scores"].get("percentis_atraso",
+                    {d: 0.5 for d in DEZENAS})
+    cooc_scores   = executor.ctx["scores"].get("coocorrencia_pares",
+                    {d: 0.5 for d in DEZENAS})
 
     # Vencidas e atrasadas
     at_result = get_atraso(executor)
     vencidas  = at_result.get("vencidas",  [])
     atrasadas = at_result.get("atrasadas", [])
 
-    # Pool: top 22 por score + vencidas obrigatórias
-    ranking  = sorted(DEZENAS, key=lambda d: -scores.get(d, 0))
-    pool_top = ranking[:22]
-    pool = list(dict.fromkeys(vencidas + pool_top))  # vencidas sempre no pool
-    for f in fixas:
-        if f not in pool:
-            pool.append(f)
+    # N+1/N+2
+    n12_res   = executor.ctx["resultados"].get("n1_n2", {})
+    fortes_n12 = n12_res.get("fortes", [])
+    apoio_n12  = n12_res.get("apoio",  [])
 
-    # Gera candidatos por estratégia
     todos = []
 
-    todos.extend(gerar_agressiva(scores, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_hibrida(scores, scores_atraso, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_equilibrada(scores, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_cobertura(scores, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_pressao(scores, vencidas, atrasadas, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_estabilidade(scores, scores_termicos, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_coocorrencia(scores, cooc_scores, pool, fixas, n_por_estrategia, cfg))
-    todos.extend(gerar_estrutural(scores, pool, fixas, n_por_estrategia, cfg))
+    # 1. Template base — score consolidado puro
+    todos.extend(gerar_por_templates(
+        scores, sorteios, fixas, n_por_estrategia, cfg, janela=200))
+
+    # 2. Template + atraso
+    todos.extend(gerar_template_atraso(
+        scores, scores_atraso, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 3. Template + miolo
+    todos.extend(gerar_template_miolo(
+        scores, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 4. Template + coocorrência
+    todos.extend(gerar_template_cooc(
+        scores, cooc_scores, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 5. Template + pressão (vencidas/atrasadas)
+    todos.extend(gerar_template_pressao(
+        scores, vencidas, atrasadas, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 6. Template + N+1/N+2
+    todos.extend(gerar_template_n12(
+        scores, fortes_n12, apoio_n12, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 7. Template recente (últimos 50 concursos)
+    todos.extend(gerar_template_recente(
+        scores, sorteios, fixas, n_por_estrategia, cfg))
+
+    # 8. Template anti-viés
+    todos.extend(gerar_template_anti_vies(
+        scores, sorteios, fixas, n_por_estrategia, cfg))
 
     # Remove duplicatas mantendo ordem
     vistos = set()
@@ -469,7 +530,18 @@ def avaliar_jogo(
 
     # Penaliza por faixas vazias ou excessivas
     pen_faixa = sum(0.1 for f in faixas if f == 0) + sum(0.05 for f in faixas if f > 5)
-    ad_estrut = round(float(max(0, 1.0 - pen_faixa)), 4)
+
+    # Penaliza jogos com miolo sub-representado (7-9, 12-14, 17-19)
+    MIOLO = {7, 8, 9, 12, 13, 14, 17, 18, 19}
+    n_miolo = len(set(jogo) & MIOLO)
+    # Historicamente o miolo contribui com ~5 dezenas por jogo
+    pen_miolo = max(0, (4 - n_miolo) * 0.08)  # penaliza se menos de 4 do miolo
+
+    # Penaliza concentração excessiva em dezenas altas (18-25)
+    n_altas = sum(1 for d in jogo if d >= 18)
+    pen_altas = max(0, (n_altas - 5) * 0.06)  # penaliza se mais de 5 dezenas >= 18
+
+    ad_estrut = round(float(max(0, 1.0 - pen_faixa - pen_miolo - pen_altas)), 4)
 
     # ── 7. Soma dentro da faixa histórica ────────────────────────────────────
     soma_ok = cfg["soma_min"] <= soma <= cfg["soma_max"]
@@ -480,14 +552,14 @@ def avaliar_jogo(
     vencidas = at_res.get("vencidas", [])
     cob_venc = sum(1 for d in jogo if d in vencidas)
 
-    # ── 9. Score total ponderado ──────────────────────────────────────────────
+    # ── 9. Score total ponderado — rebalanceado para reduzir viés de bordas ───
     score_total = (
-        sc_dezenas * 0.30 +
-        ad_termica * 0.20 +
-        ad_atraso  * 0.20 +
+        sc_dezenas * 0.25 +  # reduzido: era 0.30
+        ad_termica * 0.15 +  # reduzido: era 0.20
+        ad_atraso  * 0.25 +  # aumentado: era 0.20
         ad_n12     * 0.10 +
         ad_cooc    * 0.10 +
-        ad_estrut  * 0.05 +
+        ad_estrut  * 0.10 +  # aumentado: era 0.05
         ad_soma    * 0.05
     )
     # Bônus por cobertura de vencidas
@@ -714,26 +786,23 @@ def gerar_jogos_v5(
 # =============================================================================
 
 def breakdown_jogo(av: dict, executor: PipelineExecutor) -> pd.DataFrame:
+    """Retorna DataFrame com contribuição de cada dezena do jogo."""
     scores_glob = executor.score_consolidado()
-    at_res     = get_atraso(executor)
-    vencidas_g = at_res.get("vencidas", [])
-    n12_res    = executor.ctx["resultados"].get("n1_n2", {})
-    fortes     = n12_res.get("fortes", [])
-
     rows = []
     for d in sorted(av["jogo"]):
-        sc   = scores_glob.get(d, 0.0)
+        sc = scores_glob.get(d, 0.0)
         rank = sorted(DEZENAS, key=lambda x: -scores_glob.get(x, 0)).index(d) + 1
+        at_res  = get_atraso(executor)
         analise = at_res.get("analise", {}).get(d, {})
         rows.append({
-            "Dezena":      d,
-            "Score":       round(sc, 4),
-            "Rank Global": rank,
-            "Atraso":      analise.get("atraso", "—"),
-            "Razão A/C":   analise.get("razao", "—"),
-            "Status":      analise.get("status_ind", "—"),
-            "Vencida":     "🔴" if d in vencidas_g else "",
-            "N+1/N+2":     "🔥" if d in fortes else "",
+            "Dezena":       d,
+            "Score":        round(sc, 4),
+            "Rank Global":  rank,
+            "Atraso":       analise.get("atraso", "—"),
+            "Razão A/C":    analise.get("razao", "—"),
+            "Status":       analise.get("status_ind", "—"),
+            "Vencida":      "🔴" if d in av.get("cob_vencidas", []) else "",
+            "N+1/N+2":      "🔥" if d in executor.ctx["resultados"].get("n1_n2", {}).get("fortes", []) else "",
         })
     return pd.DataFrame(rows)
 
