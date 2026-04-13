@@ -2062,4 +2062,3 @@ class PipelineExecutor:
         if not df.empty:
             df = df.sort_values("Contribuição", ascending=False)
         return df
-
