@@ -130,11 +130,30 @@ init_state()
 # =============================================================================
 # CARREGA BASE
 # =============================================================================
+@st.cache_data(ttl=300)
+def carregar_base():
+    caminhos = [
+        "base_lotofacil.csv",
+        "../base_lotofacil.csv",
+        os.path.join(os.path.dirname(__file__), "..", "base_lotofacil.csv"),
+        "/mount/src/protocolo-hard-v4/base_lotofacil.csv",
+    ]
+    for caminho in caminhos:
+        if os.path.exists(caminho):
+            df = pd.read_csv(caminho)
+            return df.sort_values("Concurso").reset_index(drop=True)
+    st.error("❌ base_lotofacil.csv não encontrado!")
+    st.stop()
+
+@st.cache_data
+def extrair_sorteios(df):
+    cols = [c for c in df.columns if c.startswith("bola")]
+    return df[cols].values.tolist()
+
 df       = carregar_base()
 sorteios = extrair_sorteios(df)
 n_conc   = len(sorteios)
 st.sidebar.success(f"✅ Base carregada: {n_conc} concursos | C{df['Concurso'].max()}")
-
 # =============================================================================
 # SIDEBAR
 # =============================================================================
