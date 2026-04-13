@@ -508,7 +508,7 @@ with tabs[3]:
         return ""
 
     st.dataframe(
-        df_view.style.applymap(color_status, subset=["Status"]),
+        df_view.style.map(color_status, subset=["Status"]),
         use_container_width=True, hide_index=True, height=500
     )
 
