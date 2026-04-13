@@ -525,6 +525,7 @@ with tabs[0]:
             for e in ETAPAS[1:]:
                 st.session_state["analise"][e] = None
             st.session_state["pipeline"] = []
+            st.info("▶️ Etapa concluída! Próxima: **2️⃣ Atraso & Ciclo**")
             st.rerun()
     else:
         st.dataframe(tabela_frequencia(sorteios), use_container_width=True, hide_index=True)
@@ -553,6 +554,7 @@ with tabs[0]:
             }, pipeline_update=candidatas)
             for e in ETAPAS[1:]:
                 st.session_state["analise"][e] = None
+            st.info("▶️ Etapa concluída! Próxima: **2️⃣ Atraso & Ciclo**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -576,13 +578,14 @@ with tabs[1]:
         candidatas_e1 = st.session_state["pipeline"]
         st.info(f"Entrada da Etapa 1: **{' '.join(str(n).zfill(2) for n in candidatas_e1)}**")
 
+        # Histórico completo para atraso/ciclo — janela não afeta vencidas
         df_at = calcular_atrasos(sorteios)
         ciclos_l = [{"Dezena":n,"Ciclo Médio":ciclo_medio(sorteios,n)} for n in range(1,26)]
         df_cic = pd.DataFrame(ciclos_l)
         df_comp = df_at.merge(df_cic, on="Dezena")
         df_comp["Status"] = df_comp.apply(
-            lambda r: "🔴 VENCIDA" if r["Atraso"]>(r["Ciclo Médio"] or 99)*1.5
-            else ("🟡 No ciclo" if r["Atraso"]>(r["Ciclo Médio"] or 99)*0.8 else "🟢 Ok"), axis=1)
+            lambda r: "🔴 VENCIDA" if r["Atraso"] > (r["Ciclo Médio"] or 2.5)*1.5
+            else ("🟡 No ciclo" if r["Atraso"] > (r["Ciclo Médio"] or 2.5)*0.8 else "🟢 Ok"), axis=1)
         st.dataframe(df_comp.sort_values("Atraso", ascending=False), use_container_width=True, hide_index=True)
 
         vencidas = df_comp[df_comp["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
@@ -602,6 +605,8 @@ with tabs[1]:
             }, pipeline_update=candidatas_e2)
             for e in ETAPAS[2:]:
                 st.session_state["analise"][e] = None
+            st.success("✅ Etapa 2 concluída! Vá para a aba **3️⃣ Estrutural**")
+            st.info("▶️ Etapa concluída! Próxima: **3️⃣ Estrutural**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -655,6 +660,7 @@ with tabs[2]:
             }, pipeline_update=candidatas_e3)
             for e in ETAPAS[3:]:
                 st.session_state["analise"][e] = None
+            st.info("▶️ Etapa concluída! Próxima: **4️⃣ Composição**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -717,6 +723,7 @@ with tabs[3]:
             }, pipeline_update=candidatas_e4)
             for e in ETAPAS[4:]:
                 st.session_state["analise"][e] = None
+            st.info("▶️ Etapa concluída! Próxima: **5️⃣ Sequências**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -766,6 +773,7 @@ with tabs[4]:
             }, pipeline_update=candidatas_e5)
             for e in ETAPAS[5:]:
                 st.session_state["analise"][e] = None
+            st.info("▶️ Etapa concluída! Próxima: **6️⃣ N+1/N+2**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -837,6 +845,7 @@ with tabs[5]:
                 }, pipeline_update=candidatas_e6)
                 for e in ETAPAS[6:]:
                     st.session_state["analise"][e] = None
+                st.info("▶️ Etapa concluída! Próxima: **7️⃣ Coocorrência**")
                 st.rerun()
         else:
             st.warning("Nenhum similar encontrado. Reduza o threshold no menu lateral.")
@@ -921,6 +930,7 @@ with tabs[6]:
             }, pipeline_update=candidatas_e7)
             for e in ETAPAS[7:]:
                 st.session_state["analise"][e] = None
+            st.info("▶️ Etapa concluída! Próxima: **8️⃣ Monte Carlo**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -997,6 +1007,7 @@ with tabs[7]:
                 "pool_final":pool_ordenado,
                 "score_final":score_final
             }, pipeline_update=pool_ordenado)
+            st.info("▶️ Etapa concluída! Próxima: **🏆 Relatório → 🎰 Gerar**")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -1116,8 +1127,8 @@ with tabs[13]:
                 cl_a=[{"Dezena":n,"Ciclo Médio":ciclo_medio(sorteios,n)} for n in range(1,26)]
                 df_c_a=df_at_a.merge(pd.DataFrame(cl_a),on="Dezena")
                 df_c_a["Status"]=df_c_a.apply(
-                    lambda r:"🔴 VENCIDA" if r["Atraso"]>(r["Ciclo Médio"] or 99)*1.5
-                    else("🟡 No ciclo" if r["Atraso"]>(r["Ciclo Médio"] or 99)*0.8 else "🟢 Ok"),axis=1)
+                    lambda r:"🔴 VENCIDA" if r["Atraso"]>(r["Ciclo Médio"] or 2.5)*1.5
+                    else("🟡 No ciclo" if r["Atraso"]>(r["Ciclo Médio"] or 2.5)*0.8 else "🟢 Ok"),axis=1)
                 ven_a=df_c_a[df_c_a["Status"]=="🔴 VENCIDA"]["Dezena"].tolist()
                 noc_a=df_c_a[df_c_a["Status"]=="🟡 No ciclo"]["Dezena"].tolist()
                 cand2=list(dict.fromkeys(cand1+ven_a+noc_a[:3]))
@@ -1204,6 +1215,7 @@ with tabs[13]:
                     "pool_final":pool_f,"score_final":sf_a},pipeline_update=pool_f)
 
             st.success("✅ Protocolo executado! Gerando combinações...")
+            st.info("▶️ Etapa concluída! Próxima: **🏆 Relatório → 🎰 Gerar**")
             st.rerun()
 
     else:
