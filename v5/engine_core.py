@@ -1981,7 +1981,13 @@ class PipelineExecutor:
         """
         Combina todos os scores por dezena das etapas concluídas,
         usando os pesos definidos no REGISTRY (ou override).
-        Retorna {dezena: score_final_normalizado}
+
+        Correções anti-viés aplicadas:
+        1. Floor mínimo de 0.15 — nenhuma dezena fica com score zero
+        2. Equalização parcial (30%) — puxa scores para a média
+           evitando que dezenas sejam sistematicamente ignoradas
+        3. Penalidade para dezenas de alta frequência histórica
+           que não saem nos últimos 20 concursos (ruído)
         """
         acum = {n: 0.0 for n in DEZENAS}
         peso_total = 0.0
@@ -2005,11 +2011,40 @@ class PipelineExecutor:
             peso_total += peso
 
         if peso_total == 0:
-            return {n: 0.0 for n in DEZENAS}
+            return {n: 1.0 / 25 for n in DEZENAS}
 
-        # Normaliza o consolidado final
+        # Score bruto médio ponderado
         raw = {n: acum[n] / peso_total for n in DEZENAS}
-        return normalizar(raw)
+
+        # ── 1. Equalização parcial (30% puxado para a média) ──────────────────
+        # Impede que dezenas fiquem com score próximo de zero apenas
+        # por não aparecerem em etapas específicas
+        media = sum(raw.values()) / len(raw)
+        eq = {n: raw[n] * 0.70 + media * 0.30 for n in DEZENAS}
+
+        # ── 2. Floor mínimo de 0.15 ───────────────────────────────────────────
+        # Garante que toda dezena tenha ao menos 15% de chance
+        # de ser sorteada no gerador — sem excluir ninguém
+        floor_val = max(eq.values()) * 0.15
+        floored = {n: max(eq[n], floor_val) for n in DEZENAS}
+
+        # ── 3. Penalidade para ruído recente ──────────────────────────────────
+        # Dezenas com score alto mas que não saíram nos últimos 20 concursos
+        # recebem penalidade leve — reduz viés de acumulação histórica
+        resultados = self.ctx.get("resultados", {})
+        sorteios_rec = resultados.get("_sorteios_recentes", [])
+        if sorteios_rec and len(sorteios_rec) >= 20:
+            ultimos_20 = sorteios_rec[-20:]
+            freq_rec = {n: sum(1 for s in ultimos_20 if n in s) / 20
+                        for n in DEZENAS}
+            media_sc = sum(floored.values()) / len(floored)
+            for n in DEZENAS:
+                # Penaliza dezenas com score > média mas freq recente < 40%
+                if floored[n] > media_sc * 1.2 and freq_rec[n] < 0.40:
+                    floored[n] *= 0.75
+
+        # Normaliza final
+        return normalizar(floored)
 
     def progresso(self, incluir_experimentais: bool = False) -> tuple:
         """Retorna (concluidas, total) para etapas não-experimentais (ou todas)."""
