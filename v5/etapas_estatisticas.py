@@ -22,13 +22,27 @@
 #   - score_ponderado (consolidação parcial)
 # =============================================================================
 
+import sys
+import os
+
+# Garante que o diretório v5 está no path
+_dir = os.path.dirname(os.path.abspath(__file__))
+if _dir not in sys.path:
+    sys.path.insert(0, _dir)
+
 import numpy as np
 import pandas as pd
 import math
 import random
 from collections import Counter
 from itertools import combinations
-from scipy import stats as sp_stats
+
+try:
+    from scipy import stats as sp_stats
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "scipy"])
+    from scipy import stats as sp_stats
 
 from engine_core import (
     DEZENAS, PRIMOS, FIBONACCI, MULTIPLOS_3,
@@ -36,8 +50,6 @@ from engine_core import (
 )
 from etapa_termica import get_termica, get_scores_termicos
 from etapa_atraso import get_atraso, get_scores_atraso, get_vencidas_atraso
-
-ESP_FREQ = 15 / 25  # 0.60
 
 # =============================================================================
 # HELPERS INTERNOS
