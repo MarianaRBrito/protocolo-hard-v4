@@ -4,237 +4,165 @@ import numpy as np
 from scipy import stats
 import time
 
-# Bibliotecas de ML com Fallback determinístico (Garante que o app não quebre)
-try:
-    from sklearn.ensemble import RandomForestRegressor, IsolationForest
-    from sklearn.preprocessing import MinMaxScaler
-    HAS_SKLEARN = True
-except ImportError:
-    HAS_SKLEARN = False
-
 # =============================================================================
-# 1. ARQUITETURA DE REGISTRO V5 (AUDITÁVEL)
+# MOTOR DE ENGENHARIA V5
 # =============================================================================
 
 class ProtocoloV5:
     def __init__(self, df):
-        self.df = df
+        # Converte para inteiro puro para evitar o erro do np.int64 na tela
+        self.df = df.astype(int)
         self.dezenas = list(range(1, 26))
-        self.registry = self._build_registry()
-        # Contexto compartilhado entre etapas (Onde a cascata acontece)
         self.context = {
-            "scores_individuais": pd.DataFrame(index=self.dezenas),
             "termica": {},
-            "atraso_individual": {},
-            "metricas_etapas": {},
-            "jogos_candidatos": []
+            "atraso": {},
+            "scores_etapas": pd.DataFrame(index=self.dezenas)
         }
 
-    def _build_registry(self):
-        """Registro das 137 etapas (Agrupadas por lógica de execução)"""
-        # Exemplo da estrutura exigida para cada item do pipeline
-        pipeline = [
-            # ETAPA CENTRAL: TÉRMICA
-            {"id": "termica_avancada", "nome": "Análise Térmica", "peso": 2.5, "tipo": "base"},
-            # COMPORTAMENTAL
-            {"id": "atraso_individual", "nome": "Atraso/Ciclo Individual", "peso": 2.0, "tipo": "comportamental"},
-            {"id": "frequencia_janelas", "nome": "Frequência por Janelas", "peso": 1.5, "tipo": "estatistica"},
-            # ESTRUTURAL
-            {"id": "moldura_miolo", "nome": "Moldura vs Miolo", "peso": 1.0, "tipo": "estrutural"},
-            {"id": "pares_impares", "nome": "Paridade Estrutural", "peso": 1.0, "tipo": "estrutural"},
-            # INTELIGÊNCIA/MATEMÁTICA
-            {"id": "shannon_entropy", "nome": "Entropia de Shannon", "peso": 1.3, "tipo": "teorica"},
-            {"id": "ks_test", "nome": "Teste Kolmogorov-Smirnov", "peso": 1.2, "tipo": "estatistica"},
-            # EXPERIMENTAIS (IA)
-            {"id": "random_forest_v5", "nome": "Regressão Random Forest", "peso": 1.5, "tipo": "ia"},
-        ]
-        # Aqui, o sistema expande para as 137 sub-etapas dinamicamente
-        return pipeline
-
-    # =============================================================================
-    # 2. IMPLEMENTAÇÃO DAS ETAPAS (LOGICA REAL)
-    # =============================================================================
-
-    def run_step_termica(self):
-        """Gera temperatura, pressão e tendência curta/média/longa."""
+    def executar_termica(self):
         scores = {}
-        df_5 = self.df.head(5)
-        df_20 = self.df.head(20)
-        
+        df_recente = self.df.head(10)
+        df_antigo = self.df.iloc[10:30]
         for d in self.dezenas:
-            f_curta = (df_5 == d).any(axis=1).sum() / 5
-            f_longa = (df_20 == d).any(axis=1).sum() / 20
-            tendencia = f_curta - f_longa
+            f_atual = (df_recente == d).any(axis=1).sum() / 10
+            f_base = (df_antigo == d).any(axis=1).sum() / 20
+            tendencia = f_atual - f_base
+            pressao = 1.0 + (f_atual * 2.0)
             
             status = "MORNA"
-            if f_curta >= 0.8: status = "QUENTE"
-            elif f_curta <= 0.2: status = "FRIA"
+            cor = "#FFA500" # Laranja
+            if f_atual >= 0.7: 
+                status, cor = "QUENTE", "#FF4B4B" # Vermelho
+            elif f_atual <= 0.3: 
+                status, cor = "FRIA", "#00BFFF" # Azul
             
-            pressao = 1.0 + (abs(tendencia) * 2)
-            
-            self.context["termica"][d] = {
-                "status": status, 
-                "tendencia": tendencia, 
-                "pressao": pressao,
-                "val": f_curta
-            }
-            scores[d] = (f_curta * 0.6) + (tendencia * 0.4)
+            self.context["termica"][d] = {"status": status, "cor": cor, "pressao": pressao}
+            scores[d] = (f_atual * 0.5) + (tendencia * 0.5)
         return pd.Series(scores)
 
-    def run_step_atraso_individual(self):
-        """Cálculo de Atraso vs Ciclo Próprio (Correção solicitada)."""
+    def executar_atraso(self):
         scores = {}
         for d in self.dezenas:
-            # Atraso Atual
             atraso = 0
             for _, row in self.df.iterrows():
                 if d in row.values: break
                 atraso += 1
-            
-            # Ciclo Médio da Dezena
             presenca = self.df.apply(lambda x: d in x.values, axis=1)
-            gaps = np.diff(presenca[presenca].index) if presenca.sum() > 1 else [len(self.df)]
-            ciclo_medio = np.mean(gaps)
+            indices = presenca[presenca].index
+            ciclo = np.mean(np.diff(indices)) if len(indices) > 1 else 2.5
+            razao = atraso / ciclo
             
-            razao = atraso / ciclo_medio if ciclo_medio > 0 else 0
+            p = 0.7
+            if 1.0 <= razao < 1.35: p = 1.4
+            elif 1.35 <= razao < 2.0: p = 2.0
+            elif razao >= 2.0: p = 0.4
             
-            # Lógica de Score V5
-            ponto = 1.0
-            if 1.0 <= razao < 1.35: ponto = 1.5 # NO CICLO
-            elif 1.35 <= razao < 2.00: ponto = 2.0 # ATRASADA
-            elif razao >= 2.00: ponto = 0.5 # VENCIDA
-            
-            # Influência da Etapa Térmica (CASCATA)
-            pressao_termica = self.context["termica"].get(d, {}).get("pressao", 1.0)
-            scores[d] = ponto * pressao_termica
-            
-            self.context["atraso_individual"][d] = {"atraso": atraso, "razao": razao}
+            # Cascata: Térmica influencia o Atraso
+            pressao_t = self.context["termica"].get(d, {}).get("pressao", 1.0)
+            scores[d] = p * pressao_t
+            self.context["atraso"][d] = {"atraso": atraso, "razao": razao}
         return pd.Series(scores)
 
-    def run_step_ml(self):
-        """Etapa de Inteligência usando Scikit-Learn (ou Heurística se falhar)."""
-        if not HAS_SKLEARN:
-            # Heurística Determinística Coerente (Fallback)
-            return pd.Series(np.random.uniform(0.5, 1.0, 25), index=self.dezenas)
+    def gerar_candidatos_v5(self):
+        final_s = self.context["scores_etapas"].sum(axis=1)
+        # Normaliza para probabilidade
+        prob = (final_s - final_s.min()) / (final_s.max() - final_s.min() + 1e-9)
+        prob = prob / prob.sum()
         
-        # Lógica real: RF para prever próxima frequência baseado em atraso e térmica
-        # (Implementação simplificada para o pipeline)
-        return pd.Series(0.8, index=self.dezenas)
-
-    # =============================================================================
-    # 3. CONSOLIDAÇÃO E GERADOR DE CANDIDATOS
-    # =============================================================================
-
-    def consolidar_final(self):
-        final = pd.Series(0.0, index=self.dezenas)
-        for step in self.registry:
-            sid = step['id']
-            if sid in self.context["scores_individuais"].columns:
-                final += self.context["scores_individuais"][sid] * step['peso']
-        return (final - final.min()) / (final.max() - final.min())
-
-    def engine_gerador_v5(self, n_jogos=10):
-        """
-        CAMADA A: Gera 1000 candidatos via amostragem ponderada pelo score.
-        CAMADA B: Filtra e ranqueia os candidatos por aderência estrutural.
-        """
-        score_final = self.consolidar_final()
         candidatos = []
-        
-        # Pesos para random.choice
-        probs = score_final.values / score_final.sum()
-        
         for _ in range(1000):
-            jogo = sorted(np.random.choice(self.dezenas, 15, replace=False, p=probs))
+            # Gera combinação e converte para lista de inteiros normais (Python int)
+            jogo = np.random.choice(self.dezenas, 15, replace=False, p=prob)
+            jogo = sorted([int(x) for x in jogo]) 
             
-            # Avaliação de Aderência (Layer B)
             pares = len([d for d in jogo if d % 2 == 0])
             soma = sum(jogo)
+            score_jogo = sum([final_s[d] for d in jogo])
             
-            # Score do Jogo (Soma dos scores das dezenas + Bônus de estrutura)
-            score_jogo = sum([score_final[d] for d in jogo])
-            if 7 <= pares <= 9: score_jogo *= 1.2
+            if 7 <= pares <= 9: score_jogo *= 1.3
             if 180 <= soma <= 210: score_jogo *= 1.1
             
             candidatos.append({"jogo": jogo, "score": score_jogo, "pares": pares, "soma": soma})
-        
-        # Entrega os N melhores candidatos comparados entre si
-        return sorted(candidatos, key=lambda x: x['score'], reverse=True)[:n_jogos]
+        return sorted(candidatos, key=lambda x: x['score'], reverse=True)[:10]
 
 # =============================================================================
-# 4. INTERFACE STREAMLIT V5
+# INTERFACE VISUAL (DASHBOARD V5)
 # =============================================================================
 
 def main():
-    st.set_page_config(page_title="Protocolo V5", layout="wide")
-    st.title("🚀 Protocolo Lotofácil V5")
-    st.markdown("---")
+    st.set_page_config(page_title="V5 Protocol", layout="wide")
+    
+    # CSS para deixar as "coisinhas" bonitas
+    st.markdown("""
+        <style>
+        .dezena-box { display: inline-block; padding: 5px 10px; margin: 2px; border-radius: 5px; background: #262730; border: 1px solid #464b5d; font-weight: bold; color: #00FF00; }
+        .metric-card { background: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid #FF4B4B; }
+        </style>
+    """, unsafe_allow_html=True)
 
-    # Mock de dados caso arquivo não exista (para teste imediato)
+    st.title("🛡️ Protocolo Lotofácil V5")
+    st.caption("Refatoração Estrutural | Motor em Cascata | Layer B Filter")
+
     try:
-        df = pd.read_csv("base_lotofacil.csv")
+        df = pd.read_csv("base_lotofacil.csv").iloc[:, :15]
     except:
-        data = np.random.randint(1, 26, size=(100, 15))
-        df = pd.DataFrame(data)
+        df = pd.DataFrame(np.random.randint(1, 26, size=(100, 15)))
 
     p = ProtocoloV5(df)
 
-    # --- SIDEBAR: CONTROLE DO PIPELINE ---
-    st.sidebar.header("🛠️ Configuração do Executor")
-    run_all = st.sidebar.button("EXECUTAR PROTOCOLO INTEGRAL")
-
-    if run_all:
-        with st.status("Executando Pipeline Sequencial...") as status:
-            # 1. TÉRMICA (BASE)
-            st.write("Calculando Estabilidade Térmica...")
-            p.context["scores_individuais"]["termica_avancada"] = p.run_step_termica()
-            
-            # 2. ATRASO (USA TÉRMICA)
-            st.write("Corrigindo Atraso por Razão de Stress...")
-            p.context["scores_individuais"]["atraso_individual"] = p.run_step_atraso_individual()
-            
-            # 3. ML / IA
-            st.write("Aplicando Modelos de Predição...")
-            p.context["scores_individuais"]["random_forest_v5"] = p.run_step_ml()
-            
-            status.update(label="Protocolo V5 Concluído!", state="complete")
+    # Sidebar com cara de "Master Control"
+    with st.sidebar:
+        st.header("🎮 Comandos")
+        if st.button("🔥 EXECUTAR PROTOCOLO INTEGRAL", use_container_width=True):
+            with st.spinner("Processando Camadas..."):
+                p.context["scores_etapas"]["Termica"] = p.executar_termica()
+                p.context["scores_etapas"]["Atraso"] = p.executar_atraso()
+                st.session_state["p_v5"] = p
         
-        st.session_state["p5"] = p
+        st.divider()
+        st.markdown("**Status do Sistema:**")
+        if "p_v5" in st.session_state:
+            st.success("Protocolo Ativo")
+        else:
+            st.warning("Aguardando Execução")
 
-    # --- ÁREA PRINCIPAL: RESULTADOS ---
-    if "p5" in st.session_state:
-        p_obj = st.session_state["p5"]
+    if "p_v5" in st.session_state:
+        obj = st.session_state["p_v5"]
         
-        tab1, tab2, tab3 = st.tabs(["📊 Score & Ranking", "🌡️ Análise Auditável", "💎 Jogos Candidatos"])
+        t1, t2, t3 = st.tabs(["📈 PERFORMANCE", "🧬 AUDITORIA GENÉTICA", "💎 JOGOS DE ELITE"])
         
-        with tab1:
-            score_resumo = p_obj.consolidar_final().sort_values(ascending=False)
-            st.subheader("Ranking Consolidado das Dezenas")
-            st.bar_chart(score_resumo)
-            st.dataframe(score_resumo.to_frame(name="Score Final").T)
+        with t1:
+            st.subheader("Ranking de Força das Dezenas")
+            resumo = obj.context["scores_etapas"].sum(axis=1).sort_values(ascending=False)
+            st.bar_chart(resumo, color="#FF4B4B")
 
-        with tab2:
-            st.subheader("Leitura Térmica e Atraso (Auditável)")
-            # Construindo tabela comparativa real
-            audit = []
-            for d in p_obj.dezenas:
-                audit.append({
-                    "Dezena": d,
-                    "Status": p_obj.context["termica"][d]["status"],
-                    "Pressão": round(p_obj.context["termica"][d]["pressao"], 2),
-                    "Razão Atraso/Ciclo": round(p_obj.context["atraso_individual"][d]["razao"], 2)
-                })
-            st.table(audit)
+        with t2:
+            st.subheader("Leitura Térmica e de Atraso (Real-time)")
+            cols = st.columns(5)
+            for i, d in enumerate(range(1, 26)):
+                with cols[i % 5]:
+                    t_info = obj.context["termica"][d]
+                    st.markdown(f"""
+                    <div class="metric-card" style="border-left-color: {t_info['cor']}">
+                        <b>Dezena {d:02d}</b><br>
+                        <small>{t_info['status']}</small><br>
+                        <small>Razão: {obj.context['atraso'][d]['razao']:.2f}</small>
+                    </div><br>
+                    """, unsafe_allow_html=True)
 
-        with tab3:
-            st.subheader("Seleção de Jogos (Layer B - Comparação de 1000 Candidatos)")
-            melhores_jogos = p_obj.engine_gerador_v5()
-            
-            for i, item in enumerate(melhores_jogos):
-                with st.expander(f"Candidato #{i+1} | Score: {item['score']:.2f}"):
-                    st.write(f"**Dezenas:** `{item['jogo']}`")
-                    st.write(f"Pares: {item['pares']} | Soma: {item['soma']}")
-                    st.progress(min(item['score'] / 15, 1.0))
+        with t3:
+            st.subheader("Seleção Layer B (Melhores entre 1000 candidatos)")
+            jogos = obj.gerar_candidatos_v5()
+            for idx, item in enumerate(jogos):
+                with st.expander(f"⭐ CANDIDATO #{idx+1} | Pontuação: {item['score']:.2f}"):
+                    # Renderiza dezenas como "coisinhas" bonitas
+                    html_dezenas = "".join([f'<span class="dezena-box">{d:02d}</span>' for d in item['jogo']])
+                    st.markdown(html_dezenas, unsafe_allow_html=True)
+                    st.markdown(f"---")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Pares", item['pares'])
+                    c2.metric("Soma", item['soma'])
+                    c3.metric("Aderência", f"{idx+1}º Lugar")
 
 if __name__ == "__main__":
     main()
