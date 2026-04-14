@@ -1,6 +1,4 @@
-from pathlib import Path
-
-code = r'''import streamlit as st
+import streamlit as st
 import pandas as pd
 import numpy as np
 from collections import Counter
@@ -1612,8 +1610,3 @@ with tabs[13]:
                 st.session_state["jogos_gerados"] = jogos
             else:
                 st.error("Nenhuma combinação gerada.")
-'''
-
-path = Path('/mnt/data/app_v42_unico.py')
-path.write_text(code, encoding='utf-8')
-print(path)
