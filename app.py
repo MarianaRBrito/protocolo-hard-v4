@@ -12,7 +12,7 @@ from io import StringIO
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Protocolo Hard V4.4", layout="wide")
+st.set_page_config(page_title="Protocolo Hard V4.5", layout="wide")
 
 COLS_DEZENAS = [f"bola {i}" for i in range(1, 16)]
 PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23}
@@ -55,6 +55,7 @@ ETAPAS = [
     "n12",
     "coocorrencia",
     "monte_carlo",
+    "nivel1",
 ]
 
 ETAPA_LABELS = {
@@ -66,6 +67,7 @@ ETAPA_LABELS = {
     "n12": "6️⃣ N+1/N+2",
     "coocorrencia": "7️⃣ Coocorrência",
     "monte_carlo": "8️⃣ Monte Carlo",
+    "nivel1": "9️⃣ Nível 1",
 }
 
 PERFIS = {
@@ -991,7 +993,7 @@ janela = st.sidebar.slider("Janela de análise", 50, len(sorteios), min(500, len
 threshold = st.sidebar.slider("Threshold N+1/N+2 (%)", 50, 100, 80)
 ref_ui = st.sidebar.number_input("Índice Referência (0=último)", 0, len(sorteios) - 1, 0)
 ref = concurso_ref_ui_to_idx(ref_ui, len(sorteios))
-ativar_nivel1 = st.sidebar.checkbox("Ativar filtros Nível 1 no score", value=True)
+ativar_nivel1 = True
 
 verificar_params(janela, threshold, ref_ui)
 cfg = calibrar(st_tuple)
@@ -1005,7 +1007,7 @@ with st.sidebar.expander("📐 Filtros calibrados"):
     st.write(f"Moldura: {cfg['mold_min']}–{cfg['mold_max']}")
     st.write(f"Máx seq: {cfg['max_seq']} | Máx faixa: {cfg['max_faixa']} | Máx quinteto: {cfg['quint_max']}")
     st.write(f"Máx primos: {cfg['max_primo']} | Máx fib: {cfg['max_fib']}")
-    st.caption(f"Nível 1: {'ativo' if ativar_nivel1 else 'desligado'} | KL={metricas_n1['kl_div']:.4f}")
+    st.caption(f"Nível 1: obrigatório no score | KL={metricas_n1['kl_div']:.4f}")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📋 Status do protocolo")
@@ -1041,7 +1043,7 @@ sorteios_j = sorteios[-janela:]
 # ============================================================
 # TOPO
 # ============================================================
-st.title("📊 Protocolo Hard V4.4 — Lotofácil")
+st.title("📊 Protocolo Hard V4.5 — Lotofácil")
 st.markdown(
     f"Fonte: **{st.session_state.get('base_source', 'local')}** | "
     f"Base: **{len(sorteios)} concursos** | "
@@ -1548,46 +1550,85 @@ with tabs[11]:
 # ============================================================
 with tabs[12]:
     st.header("🧠 Nível 1 — Filtros avançados")
-    st.caption("Implementados: Bootstrap, Permutation, CUSUM, KS, Ljung-Box, KL-divergência, Skewness/Curtose, Lift, ROC/AUC e Kelly informacional.")
+    st.caption("Agora esta etapa é obrigatória: executa, entra no relatório e alimenta o score da geração.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("KL div", round(metricas_n1["kl_div"], 4))
-    c2.metric("KS global p", round(metricas_n1["ks_global_p"], 4))
-    c3.metric("Skewness", round(metricas_n1["skew_recent"], 4))
-    c4.metric("Curtose", round(metricas_n1["kurt_recent"], 4))
+    if etapa_ok("nivel1"):
+        d = st.session_state["analise"]["nivel1"]
+        st.success("✅ Etapa Nível 1 concluída e incorporada ao score")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("KL div", round(d["kl_div"], 4))
+        c2.metric("KS global p", round(d["ks_global_p"], 4))
+        c3.metric("Skewness", round(d["skew_recent"], 4))
+        c4.metric("Curtose", round(d["kurt_recent"], 4))
 
-    st.subheader("AUC dos critérios")
-    st.dataframe(pd.DataFrame([auc_n1]), use_container_width=True, hide_index=True)
+        st.subheader("AUC dos critérios")
+        st.dataframe(pd.DataFrame([d["auc"]]), use_container_width=True, hide_index=True)
 
-    st.subheader("Top pares por Lift")
-    top_lift = lift_top_pairs(st_tuple, ref_idx=ref, janela=min(200, len(sorteios)), top=20)
-    st.dataframe(
-        pd.DataFrame([
-            {"Par": f"{a:02d}+{b:02d}", "Joint": round(joint, 4), "Lift": round(lift, 4)}
-            for a, b, joint, lift in top_lift
-        ]),
-        use_container_width=True,
-        hide_index=True,
-    )
+        st.subheader("Top pares por Lift")
+        st.dataframe(
+            pd.DataFrame([
+                {"Par": f"{a:02d}+{b:02d}", "Joint": round(joint, 4), "Lift": round(lift, 4)}
+                for a, b, joint, lift in d["top_lift"]
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    st.subheader("Ranking por bônus Nível 1")
-    st.dataframe(metricas_n1["df"], use_container_width=True, hide_index=True)
+        st.subheader("Ranking por bônus Nível 1")
+        st.dataframe(d["df"], use_container_width=True, hide_index=True)
 
-    st.subheader("Kelly informacional")
-    banca = st.number_input("Banca simulada (R$)", min_value=1.0, value=100.0, step=10.0, key="banca_kelly")
-    krows = []
-    for faixa in [11, 12, 13, 14, 15]:
-        p = PROB[faixa]
-        b = max(PREMIOS[faixa] / 3.5 - 1, 0)
-        q = 1 - p
-        frac = max(0.0, (b * p - q) / b) if b > 0 else 0.0
-        krows.append({
-            "Faixa": faixa,
-            "Prob.": p,
-            "Kelly %": round(frac * 100, 6),
-            "Aposta sugerida (R$)": round(frac * banca, 4),
-        })
-    st.dataframe(pd.DataFrame(krows), use_container_width=True, hide_index=True)
+        st.subheader("Kelly informacional")
+        banca = st.number_input("Banca simulada (R$)", min_value=1.0, value=100.0, step=10.0, key="banca_kelly")
+        krows = []
+        for faixa in [11, 12, 13, 14, 15]:
+            p = PROB[faixa]
+            b = max(PREMIOS[faixa] / 3.5 - 1, 0)
+            q = 1 - p
+            frac = max(0.0, (b * p - q) / b) if b > 0 else 0.0
+            krows.append({
+                "Faixa": faixa,
+                "Prob.": p,
+                "Kelly %": round(frac * 100, 6),
+                "Aposta sugerida (R$)": round(frac * banca, 4),
+            })
+        st.dataframe(pd.DataFrame(krows), use_container_width=True, hide_index=True)
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("KL div", round(metricas_n1["kl_div"], 4))
+        c2.metric("KS global p", round(metricas_n1["ks_global_p"], 4))
+        c3.metric("Skewness", round(metricas_n1["skew_recent"], 4))
+        c4.metric("Curtose", round(metricas_n1["kurt_recent"], 4))
+
+        st.subheader("AUC dos critérios")
+        st.dataframe(pd.DataFrame([auc_n1]), use_container_width=True, hide_index=True)
+
+        top_lift = lift_top_pairs(st_tuple, ref_idx=ref, janela=min(200, len(sorteios)), top=20)
+        st.subheader("Top pares por Lift")
+        st.dataframe(
+            pd.DataFrame([
+                {"Par": f"{a:02d}+{b:02d}", "Joint": round(joint, 4), "Lift": round(lift, 4)}
+                for a, b, joint, lift in top_lift
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.subheader("Ranking por bônus Nível 1")
+        st.dataframe(metricas_n1["df"], use_container_width=True, hide_index=True)
+
+        st.info("Ao confirmar esta etapa, os filtros Nível 1 passam a contar oficialmente no protocolo, no relatório e na geração.")
+        if st.button("✅ Confirmar Etapa 9 — Nível 1", type="primary"):
+            salvar_etapa("nivel1", {
+                "df": metricas_n1["df"],
+                "bonus": metricas_n1["bonus"],
+                "kl_div": metricas_n1["kl_div"],
+                "ks_global_p": metricas_n1["ks_global_p"],
+                "skew_recent": metricas_n1["skew_recent"],
+                "kurt_recent": metricas_n1["kurt_recent"],
+                "auc": auc_n1,
+                "top_lift": top_lift,
+            }, pipeline_update=st.session_state["pipeline"])
+            st.rerun()
 
 
 # ============================================================
@@ -1614,9 +1655,23 @@ with tabs[13]:
         st.subheader("🎯 Pool final")
         if etapa_ok("monte_carlo"):
             d = analise["monte_carlo"]
+            n1_df = analise["nivel1"]["df"].set_index("Dezena") if etapa_ok("nivel1") else metricas_n1["df"].set_index("Dezena")
             for i, n in enumerate(d["pool_final"][:20]):
-                extra = f" | N1 {metricas_n1['df'].set_index('Dezena').loc[n, 'Bonus N1']:.4f}" if ativar_nivel1 else ""
+                extra = f" | N1 {n1_df.loc[n, 'Bonus N1']:.4f}"
                 st.write(f"#{i+1} {n:02d} — score {d['score_final'][n]}{extra}")
+
+    if etapa_ok("nivel1"):
+        st.subheader("🧠 Resumo Nível 1 no relatório")
+        n1 = analise["nivel1"]
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("KL div", round(n1["kl_div"], 4))
+        r2.metric("KS global p", round(n1["ks_global_p"], 4))
+        r3.metric("Skewness", round(n1["skew_recent"], 4))
+        r4.metric("Curtose", round(n1["kurt_recent"], 4))
+        st.write("AUC dos critérios:")
+        st.dataframe(pd.DataFrame([n1["auc"]]), use_container_width=True, hide_index=True)
+        st.write("Top 10 dezenas por bônus Nível 1:")
+        st.dataframe(n1["df"].head(10), use_container_width=True, hide_index=True)
 
     if st.session_state["jogos_gerados"]:
         st.subheader("🩺 Auditoria do portfólio")
@@ -1639,7 +1694,8 @@ with tabs[13]:
 # GERADOR
 # ============================================================
 with tabs[14]:
-    st.header("🎰 Gerador — Protocolo Hard V4.4")
+    st.header("🎰 Gerador — Protocolo Hard V4.5")
+    st.caption("O gerador só libera após a Etapa 9 — Nível 1 ser executada e registrada.")
 
     if not todas_ok():
         st.error(f"⛔ {tot-ok} etapa(s) pendente(s)")
@@ -1737,6 +1793,18 @@ with tabs[14]:
                 score_final[n] = round(sc, 3)
             pool_final = sorted(cand7, key=lambda n: -score_final[n])
             salvar_etapa("monte_carlo", {"chi2": chi2, "p_valor": p, "base_ok": p > 0.05, "pool_final": pool_final, "score_final": score_final}, pipeline_update=pool_final)
+
+            top_lift_auto = lift_top_pairs(st_tuple, ref_idx=ref, janela=min(200, len(sorteios)), top=20)
+            salvar_etapa("nivel1", {
+                "df": metricas_n1["df"],
+                "bonus": metricas_n1["bonus"],
+                "kl_div": metricas_n1["kl_div"],
+                "ks_global_p": metricas_n1["ks_global_p"],
+                "skew_recent": metricas_n1["skew_recent"],
+                "kurt_recent": metricas_n1["kurt_recent"],
+                "auc": auc_n1,
+                "top_lift": top_lift_auto,
+            }, pipeline_update=pool_final)
             st.rerun()
 
     else:
@@ -1780,8 +1848,8 @@ with tabs[14]:
                 threshold,
                 perfil["pesos"],
                 analise,
-                usar_nivel1=ativar_nivel1,
-                bonus_n1=metricas_n1["bonus"],
+                usar_nivel1=etapa_ok("nivel1"),
+                bonus_n1=analise["nivel1"]["bonus"] if etapa_ok("nivel1") else metricas_n1["bonus"],
             )
 
             ranking = sorted(scores.items(), key=lambda x: -x[1])
