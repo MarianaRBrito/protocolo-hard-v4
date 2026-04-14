@@ -71,16 +71,16 @@ ETAPA_LABELS = {
 PERFIS = {
     "🎯 Agressiva": {
         "pesos": {"g1": 0.34, "g2": 0.26, "g3": 0.22, "g4": 0.10, "g5": 0.08},
-        "top_pool": 17,
-        "max_comum": 6,
-        "descricao": "Mais forte sem virar clone. Núcleo menor e repetição controlada.",
+        "top_pool": 24,
+        "max_comum": 9,
+        "descricao": "Mais forte, mas sem travar o motor por impossibilidade combinatória.",
         "aviso": 8,
     },
     "⚖️ Híbrida": {
         "pesos": {"g1": 0.30, "g2": 0.24, "g3": 0.24, "g4": 0.12, "g5": 0.10},
-        "top_pool": 20,
-        "max_comum": 8,
-        "descricao": "Cobertura mais ampla, com trava de semelhança.",
+        "top_pool": 22,
+        "max_comum": 10,
+        "descricao": "Cobertura mais ampla, com semelhança controlada sem inviabilizar geração.",
         "aviso": None,
     },
 }
@@ -1488,11 +1488,22 @@ with tabs[13]:
 
             st.write(f"**Pool ({len(pool)}):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
 
+            st.caption(
+                f"Pool={len(pool)} | interseção mínima possível entre 2 jogos de 15 = {max(0, 30 - len(pool))}"
+            )
+
             jogos = []
             jogos_meta = []
             tent = 0
             max_t = max(200000, qtd * 12000)
-            mc_atual = perfil["max_comum"]
+            pool_size = len(pool)
+            mc_minimo_possivel = max(0, 30 - pool_size)
+            if perfil["max_comum"] < mc_minimo_possivel:
+                st.warning(
+                    f"max_comum={perfil['max_comum']} é impossível com pool={pool_size}. "
+                    f"Ajustando automaticamente para {mc_minimo_possivel}."
+                )
+            mc_atual = max(perfil["max_comum"], mc_minimo_possivel)
 
             prog.progress(10, text="Gerando com repetição e estrutura...")
             while len(jogos) < qtd and tent < max_t:
