@@ -12,7 +12,7 @@ from io import StringIO
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Protocolo Hard V4.5.1", layout="wide")
+st.set_page_config(page_title="Protocolo Hard V4.5.2", layout="wide")
 
 COLS_DEZENAS = [f"bola {i}" for i in range(1, 16)]
 PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23}
@@ -526,6 +526,110 @@ def auditoria_portfolio(jogos, fortes, apoio, vencidas, sorteio_anterior):
     }
 
 
+def identificar_dezenas_criticas(analise, sorteio_anterior, pool_oficial=None):
+    sinais = Counter()
+
+    if analise.get("termica"):
+        for n in analise["termica"].get("quentes", [])[:8]:
+            sinais[n] += 1
+
+    if analise.get("atraso"):
+        for n in analise["atraso"].get("vencidas", [])[:5]:
+            sinais[n] += 1
+        for n in analise["atraso"].get("no_ciclo", [])[:5]:
+            sinais[n] += 1
+
+    if analise.get("n12"):
+        for n in analise["n12"].get("fortes", [])[:6]:
+            sinais[n] += 2
+        for n in analise["n12"].get("apoio", [])[:6]:
+            sinais[n] += 1
+
+    if analise.get("nivel1"):
+        for n in analise["nivel1"].get("top_bonus", [])[:8]:
+            sinais[n] += 1
+
+    for n in sorteio_anterior:
+        sinais[n] += 1
+
+    if pool_oficial:
+        for n in list(pool_oficial)[:10]:
+            sinais[n] += 1
+
+    criticas = [n for n, pts in sinais.items() if pts >= 2]
+    criticas = sorted(criticas, key=lambda n: (-sinais[n], n))
+    return criticas, dict(sinais)
+
+
+def montar_pool_carteira(scores, ranking, perfil, qtd, fixas, criticas, vencidas, pool_oficial=None):
+    if "Agressiva" in perfil:
+        alvo_pool = max(22, min(25, qtd + 8))
+    else:
+        alvo_pool = max(24, min(25, qtd + 10))
+
+    base_ordenada = []
+    if pool_oficial:
+        base_ordenada.extend(list(pool_oficial)[:25])
+    base_ordenada.extend([n for n, _ in ranking])
+
+    pool = []
+    for grupo in [criticas, vencidas, fixas, base_ordenada]:
+        for n in grupo:
+            if n not in pool:
+                pool.append(n)
+
+    pool = pool[:max(alvo_pool, len(set(criticas) | set(vencidas) | set(fixas)))]
+    pool = sorted(pool)
+    return pool
+
+
+def montar_obrigatorias_jogo(meta_nome, idx_rot, scores, criticas, fortes, apoio, vencidas, sorteio_anterior, usage=None):
+    usage = usage or Counter()
+    base = []
+
+    def add_rot(pool, qtd):
+        if not pool or qtd <= 0:
+            return
+        ordenado = sorted(pool, key=lambda n: (usage.get(n, 0), -scores.get(n, 0), n))
+        for n in ordenado[:qtd]:
+            if n not in base:
+                base.append(n)
+
+    if meta_nome == "protecao":
+        add_rot(criticas, 3)
+        add_rot([n for n in sorteio_anterior if n in criticas], 2)
+        add_rot(fortes, 2)
+        add_rot(vencidas, 1)
+    elif meta_nome == "equilibrado":
+        add_rot(criticas, 2)
+        add_rot(fortes, 2)
+        add_rot(apoio, 1)
+        add_rot([n for n in sorteio_anterior if n in criticas], 1)
+    else:
+        add_rot(criticas, 1)
+        add_rot(fortes, 1)
+        add_rot(apoio, 1)
+        add_rot([n for n in sorteio_anterior if n in criticas], 1)
+
+    return list(dict.fromkeys(base))
+
+
+def auditoria_carteira_11mais(jogos, criticas, sorteio_anterior):
+    if not jogos:
+        return {"criticas_cegas": criticas, "jogos_rep_alta": 0, "cobertura_total": 0}
+
+    uniao = set().union(*map(set, jogos))
+    criticas_cegas = sorted(set(criticas) - uniao)
+    reps = [repeticao_ultimo(j, sorteio_anterior) for j in jogos]
+    jogos_rep_alta = sum(1 for r in reps if r >= 8)
+
+    return {
+        "criticas_cegas": criticas_cegas,
+        "jogos_rep_alta": jogos_rep_alta,
+        "cobertura_total": len(uniao),
+    }
+
+
 
 def auc_rank(y_true, scores):
     y = np.asarray(y_true, dtype=int)
@@ -976,7 +1080,7 @@ def recalcular_score_oficial_n1(sorteios, janela, ref, threshold, analise):
 
     auc_vals = list(n1["auc"].values()) if n1.get("auc") else [0.5]
     auc_mean = float(np.mean(auc_vals))
-    peso_n1 = max(0.08, min(0.18, 0.11 + (auc_mean - 0.50) * 0.20))
+    peso_n1 = max(0.06, min(0.14, 0.09 + (auc_mean - 0.50) * 0.12))
 
     score_final_oficial = {}
     for n in range(1, 26):
@@ -1011,7 +1115,7 @@ def recalcular_score_oficial_n1(sorteios, janela, ref, threshold, analise):
 # ============================================================
 # UI - BASE
 # ============================================================
-st.sidebar.title("⚙️ Protocolo Hard V4.5.1")
+st.sidebar.title("⚙️ Protocolo Hard V4.5.2")
 
 if "base_source" not in st.session_state:
     st.session_state["base_source"] = "local"
@@ -1941,29 +2045,34 @@ with tabs[14]:
             prog = st.progress(0, text="Carregando score oficial da análise...")
             scores = dict(score_final)
             ranking = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
-            pool_obrig = list(dict.fromkeys(vencidas_g))
-            pool_score = [n for n, _ in ranking if n not in pool_obrig]
-
-            if "Agressiva" in perfil_nome:
-                pool_din = max(perfil["top_pool"], min(qtd + 4, 24))
-            else:
-                pool_din = max(perfil["top_pool"], min(qtd + 8, 25))
-
             sorteio_anterior = sorteios[ref]
+
+            criticas, mapa_criticas = identificar_dezenas_criticas(
+                analise,
+                sorteio_anterior=sorteio_anterior,
+                pool_oficial=pool_final,
+            )
+            pool = montar_pool_carteira(
+                scores=scores,
+                ranking=ranking,
+                perfil=perfil_nome,
+                qtd=qtd,
+                fixas=fixas,
+                criticas=criticas,
+                vencidas=vencidas_g,
+                pool_oficial=pool_final,
+            )
+
             familias = [
                 {"nome": "protecao", "rep_min": 8, "rep_max": 10, "qmax": 4},
                 {"nome": "equilibrado", "rep_min": 7, "rep_max": 9, "qmax": 4},
                 {"nome": "agressivo", "rep_min": 6, "rep_max": 9, "qmax": 5},
             ]
 
-            pool = pool_obrig + [n for n in pool_score if n not in pool_obrig][:pool_din]
-            pool = list(dict.fromkeys(pool))
-            for f in fixas:
-                if f not in pool:
-                    pool.append(f)
-
             st.write(f"**Pool oficial base ({len(pool_final)}):** {' · '.join(f'{n:02d}' for n in pool_final[:25])}")
             st.write(f"**Pool usado na carteira ({len(pool)}):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
+            if criticas:
+                st.write(f"**Dezenas críticas da carteira ({len(criticas)}):** {' · '.join(f'{n:02d}' for n in criticas[:12])}")
 
             st.caption(
                 f"Pool={len(pool)} | interseção mínima possível entre 2 jogos de 15 = {max(0, 30 - len(pool))}"
@@ -1971,8 +2080,9 @@ with tabs[14]:
 
             jogos = []
             jogos_meta = []
+            usage = Counter()
             tent = 0
-            max_t = max(200000, qtd * 12000)
+            max_t = max(260000, qtd * 18000)
             pool_size = len(pool)
             mc_minimo_possivel = max(0, 30 - pool_size)
             if perfil["max_comum"] < mc_minimo_possivel:
@@ -1982,31 +2092,23 @@ with tabs[14]:
                 )
             mc_atual = max(perfil["max_comum"], mc_minimo_possivel)
 
-            prog.progress(10, text="Gerando com repetição e estrutura...")
+            prog.progress(10, text="Montando carteira com proteção 11+ e dezenas críticas...")
             while len(jogos) < qtd and tent < max_t:
                 tent += 1
                 meta = familias[len(jogos) % len(familias)]
 
                 base = fixas[:15]
-                obrigatorias_jogo = []
-                idx_rot = len(jogos)
-                v_pool = sorted(list(vencidas_g)) if vencidas_g else []
-                f_pool = sorted(list(fortes_g)) if fortes_g else []
-                a_pool = sorted(list(apoio_g)) if apoio_g else []
-
-                if v_pool:
-                    obrigatorias_jogo.append(v_pool[idx_rot % len(v_pool)])
-
-                if len(f_pool) >= 2:
-                    obrigatorias_jogo.append(f_pool[idx_rot % len(f_pool)])
-                    obrigatorias_jogo.append(f_pool[(idx_rot + 1) % len(f_pool)])
-                elif len(f_pool) == 1:
-                    obrigatorias_jogo.append(f_pool[0])
-
-                if a_pool:
-                    obrigatorias_jogo.append(a_pool[idx_rot % len(a_pool)])
-
-                obrigatorias_jogo = list(dict.fromkeys(obrigatorias_jogo))
+                obrigatorias_jogo = montar_obrigatorias_jogo(
+                    meta_nome=meta["nome"],
+                    idx_rot=len(jogos),
+                    scores=scores,
+                    criticas=criticas,
+                    fortes=sorted(list(fortes_g)),
+                    apoio=sorted(list(apoio_g)),
+                    vencidas=sorted(list(vencidas_g)),
+                    sorteio_anterior=sorteio_anterior,
+                    usage=usage,
+                )
 
                 for n in obrigatorias_jogo:
                     if n not in base and len(base) < 15:
@@ -2019,7 +2121,15 @@ with tabs[14]:
 
                 faltam = 15 - len(base)
                 universo = rest[:max(faltam + 14, 22)]
-                rest_sc = np.array([scores[n] for n in universo], dtype=float)
+                pesos_universo = []
+                for n in universo:
+                    peso = float(scores[n])
+                    if n in criticas:
+                        peso *= 1.18
+                    if meta["nome"] == "protecao" and n in sorteio_anterior:
+                        peso *= 1.10
+                    pesos_universo.append(peso)
+                rest_sc = np.array(pesos_universo, dtype=float)
                 rest_sc = rest_sc / rest_sc.sum()
 
                 escolh = list(np.random.choice(universo, size=faltam, replace=False, p=rest_sc))
@@ -2036,6 +2146,15 @@ with tabs[14]:
                     exigir_linhas=True,
                     exigir_colunas=True,
                 )
+
+                if meta["nome"] == "protecao":
+                    crit_no_jogo = len(set(cand) & set(criticas))
+                    rep_jogo = repeticao_ultimo(cand, sorteio_anterior)
+                    if crit_no_jogo < min(4, len(criticas)):
+                        erros.append("Proteção sem massa crítica suficiente")
+                    if rep_jogo < 8:
+                        erros.append("Proteção sem repetição alta suficiente")
+
                 if erros:
                     continue
 
@@ -2052,6 +2171,7 @@ with tabs[14]:
                 if cand not in jogos:
                     jogos.append(cand)
                     jogos_meta.append(meta)
+                    usage.update(cand)
                     prog.progress(min(10 + int(len(jogos) / qtd * 85), 95), text=f"Gerados {len(jogos)}/{qtd}")
 
             prog.progress(100, text="Concluído")
@@ -2069,10 +2189,20 @@ with tabs[14]:
                     vencidas=sorted(list(vencidas_g)),
                     sorteio_anterior=sorteio_anterior,
                 )
+                audit11 = auditoria_carteira_11mais(
+                    jogos=jogos,
+                    criticas=criticas,
+                    sorteio_anterior=sorteio_anterior,
+                )
                 if audit["cegas_criticas"]:
                     st.warning("⚠️ Dezenas críticas fora do portfólio: " + " ".join(f"{n:02d}" for n in audit["cegas_criticas"]))
+                if audit11["criticas_cegas"]:
+                    st.error("⛔ Carteira com críticas cegas: " + " ".join(f"{n:02d}" for n in audit11["criticas_cegas"]))
+                else:
+                    st.success("✅ Nenhuma dezena crítica ficou fora da carteira.")
                 st.info(f"Núcleo comum: {' '.join(f'{n:02d}' for n in audit['nucleo_comum'])} ({len(audit['nucleo_comum'])})")
                 st.info("Repetição por jogo com o último concurso: " + " | ".join(str(x) for x in audit["repeticoes"]))
+                st.info(f"Cobertura total da carteira: {audit11['cobertura_total']} dezenas | jogos com repetição alta: {audit11['jogos_rep_alta']}")
 
                 st.markdown("---")
                 for i, jogo in enumerate(jogos):
@@ -2100,7 +2230,7 @@ with tabs[14]:
                     c7.write(f"Mold/Miolo:{mold}/{miolo}")
                     c8.write(f"Primos:{c['primos']} | Fib:{c['fibonacci']} | Seq:{mx_j}")
 
-                    st.success("✅ Aprovado — filtros V4.5.1")
+                    st.success("✅ Aprovado — filtros V4.5.2")
                     st.markdown("---")
 
                 if len(jogos) > 1:
