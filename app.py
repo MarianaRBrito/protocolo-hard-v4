@@ -12,7 +12,7 @@ from io import StringIO
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Protocolo Hard V4.5", layout="wide")
+st.set_page_config(page_title="Protocolo Hard V4.5.1", layout="wide")
 
 COLS_DEZENAS = [f"bola {i}" for i in range(1, 16)]
 PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23}
@@ -66,7 +66,7 @@ ETAPA_LABELS = {
     "sequencias": "5️⃣ Sequências & Gaps",
     "n12": "6️⃣ N+1/N+2",
     "coocorrencia": "7️⃣ Coocorrência",
-    "monte_carlo": "8️⃣ Monte Carlo",
+    "monte_carlo": "8️⃣ Monte Carlo / Pool provisório",
     "nivel1": "9️⃣ Nível 1",
 }
 
@@ -89,6 +89,9 @@ PERFIS = {
 
 PREMIOS = {15: 1500000, 14: 1500, 13: 25, 12: 10, 11: 5}
 PROB = {15: 1 / 3268760, 14: 15 / 3268760, 13: 105 / 3268760, 12: 455 / 3268760, 11: 1365 / 3268760}
+
+PESOS_ANALISE_FINAL = {"g1": 0.31, "g2": 0.25, "g3": 0.24, "g4": 0.10, "g5": 0.10}
+
 
 
 # ============================================================
@@ -934,10 +937,81 @@ def calcular_scores(sorteios, janela, ref, threshold, pesos, analise, usar_nivel
     return scores, fortes_n, apoio_n, vencidas, no_ciclo
 
 
+def recalcular_score_oficial_n1(sorteios, janela, ref, threshold, analise):
+    """
+    O Nível 1 entra oficialmente na análise:
+    1) recalcula score base analítico
+    2) mede confiabilidade dos sinais N1
+    3) gera score final oficial e pool oficial usados no relatório e na geração
+    """
+    base_scores, _, _, _, _ = calcular_scores(
+        sorteios,
+        janela,
+        ref,
+        threshold,
+        PESOS_ANALISE_FINAL,
+        analise,
+        usar_nivel1=False,
+        bonus_n1=None,
+    )
+    base_norm = normalizar(base_scores)
+
+    n1 = analise["nivel1"]
+    df_n1 = n1["df"].copy()
+    bonus_raw = n1["bonus"]
+    bonus_norm = normalizar({n: float(bonus_raw.get(n, 0.0)) for n in range(1, 26)})
+
+    gates = {}
+    for _, row in df_n1.iterrows():
+        n = int(row["Dezena"])
+        lift_adj = max(0.0, float(row["Lift Ref"]) - 1.0)
+        gate = (
+            0.35 * float(row["Perm Sig"])
+            + 0.25 * float(row["KS Shift"])
+            + 0.20 * float(row["LB Sig"])
+            + 0.20 * lift_adj
+        )
+        gates[n] = gate
+    gate_norm = normalizar(gates)
+
+    auc_vals = list(n1["auc"].values()) if n1.get("auc") else [0.5]
+    auc_mean = float(np.mean(auc_vals))
+    peso_n1 = max(0.08, min(0.18, 0.11 + (auc_mean - 0.50) * 0.20))
+
+    score_final_oficial = {}
+    for n in range(1, 26):
+        n1_comp = 0.70 * bonus_norm[n] + 0.30 * gate_norm[n]
+        final_norm = (1 - peso_n1) * base_norm[n] + peso_n1 * n1_comp
+        score_final_oficial[n] = round(final_norm * 100, 4)
+
+    pool_final_oficial = sorted(range(1, 26), key=lambda n: (-score_final_oficial[n], n))
+
+    ranking_df = pd.DataFrame([
+        {
+            "Rank": i + 1,
+            "Dezena": n,
+            "Score Oficial": score_final_oficial[n],
+            "Score Base": round(base_norm[n] * 100, 4),
+            "Bonus N1": round(float(bonus_raw.get(n, 0.0)), 4),
+            "Gate N1": round(float(gate_norm[n]), 4),
+        }
+        for i, n in enumerate(pool_final_oficial)
+    ])
+
+    return {
+        "score_base_analitico": {n: round(base_norm[n] * 100, 4) for n in range(1, 26)},
+        "score_final_oficial": score_final_oficial,
+        "pool_final_oficial": pool_final_oficial,
+        "peso_n1_aplicado": round(peso_n1, 4),
+        "auc_medio": round(auc_mean, 4),
+        "ranking_final_df": ranking_df,
+    }
+
+
 # ============================================================
 # UI - BASE
 # ============================================================
-st.sidebar.title("⚙️ Protocolo Hard V4.4")
+st.sidebar.title("⚙️ Protocolo Hard V4.5.1")
 
 if "base_source" not in st.session_state:
     st.session_state["base_source"] = "local"
@@ -1577,6 +1651,11 @@ with tabs[12]:
         st.subheader("Ranking por bônus Nível 1")
         st.dataframe(d["df"], use_container_width=True, hide_index=True)
 
+        if "ranking_final_df" in d:
+            st.subheader("Score final oficial da análise")
+            st.caption(f"Peso N1 aplicado no score final: {d['peso_n1_aplicado']:.4f} | AUC médio: {d['auc_medio']:.4f}")
+            st.dataframe(d["ranking_final_df"], use_container_width=True, hide_index=True)
+
         st.subheader("Kelly informacional")
         banca = st.number_input("Banca simulada (R$)", min_value=1.0, value=100.0, step=10.0, key="banca_kelly")
         krows = []
@@ -1616,9 +1695,9 @@ with tabs[12]:
         st.subheader("Ranking por bônus Nível 1")
         st.dataframe(metricas_n1["df"], use_container_width=True, hide_index=True)
 
-        st.info("Ao confirmar esta etapa, os filtros Nível 1 passam a contar oficialmente no protocolo, no relatório e na geração.")
+        st.info("Ao confirmar esta etapa, os filtros Nível 1 passam a contar oficialmente no protocolo, recalculam o score final e redefinem o pool oficial.")
         if st.button("✅ Confirmar Etapa 9 — Nível 1", type="primary"):
-            salvar_etapa("nivel1", {
+            dados_n1 = {
                 "df": metricas_n1["df"],
                 "bonus": metricas_n1["bonus"],
                 "kl_div": metricas_n1["kl_div"],
@@ -1627,7 +1706,12 @@ with tabs[12]:
                 "kurt_recent": metricas_n1["kurt_recent"],
                 "auc": auc_n1,
                 "top_lift": top_lift,
-            }, pipeline_update=st.session_state["pipeline"])
+            }
+            analise_tmp = dict(st.session_state["analise"])
+            analise_tmp["nivel1"] = dados_n1
+            oficial = recalcular_score_oficial_n1(sorteios, janela, ref, threshold, analise_tmp)
+            dados_n1.update(oficial)
+            salvar_etapa("nivel1", dados_n1, pipeline_update=oficial["pool_final_oficial"])
             st.rerun()
 
 
@@ -1653,12 +1737,16 @@ with tabs[13]:
 
     with c2:
         st.subheader("🎯 Pool final")
-        if etapa_ok("monte_carlo"):
-            d = analise["monte_carlo"]
-            n1_df = analise["nivel1"]["df"].set_index("Dezena") if etapa_ok("nivel1") else metricas_n1["df"].set_index("Dezena")
-            for i, n in enumerate(d["pool_final"][:20]):
+        if etapa_ok("nivel1") and "pool_final_oficial" in analise["nivel1"]:
+            d = analise["nivel1"]
+            n1_df = analise["nivel1"]["df"].set_index("Dezena")
+            for i, n in enumerate(d["pool_final_oficial"][:20]):
                 extra = f" | N1 {n1_df.loc[n, 'Bonus N1']:.4f}"
-                st.write(f"#{i+1} {n:02d} — score {d['score_final'][n]}{extra}")
+                st.write(f"#{i+1} {n:02d} — score oficial {d['score_final_oficial'][n]}{extra}")
+        elif etapa_ok("monte_carlo"):
+            d = analise["monte_carlo"]
+            for i, n in enumerate(d["pool_final"][:20]):
+                st.write(f"#{i+1} {n:02d} — score provisório {d['score_final'][n]}")
 
     if etapa_ok("nivel1"):
         st.subheader("🧠 Resumo Nível 1 no relatório")
@@ -1672,6 +1760,10 @@ with tabs[13]:
         st.dataframe(pd.DataFrame([n1["auc"]]), use_container_width=True, hide_index=True)
         st.write("Top 10 dezenas por bônus Nível 1:")
         st.dataframe(n1["df"].head(10), use_container_width=True, hide_index=True)
+        if "ranking_final_df" in n1:
+            st.write("Top 15 do score final oficial da análise:")
+            st.dataframe(n1["ranking_final_df"].head(15), use_container_width=True, hide_index=True)
+            st.caption(f"Peso N1 aplicado: {n1['peso_n1_aplicado']:.4f} | AUC médio: {n1['auc_medio']:.4f}")
 
     if st.session_state["jogos_gerados"]:
         st.subheader("🩺 Auditoria do portfólio")
@@ -1694,7 +1786,7 @@ with tabs[13]:
 # GERADOR
 # ============================================================
 with tabs[14]:
-    st.header("🎰 Gerador — Protocolo Hard V4.5")
+    st.header("🎰 Gerador — Protocolo Hard V4.5.1")
     st.caption("O gerador só libera após a Etapa 9 — Nível 1 ser executada e registrada.")
 
     if not todas_ok():
@@ -1795,7 +1887,7 @@ with tabs[14]:
             salvar_etapa("monte_carlo", {"chi2": chi2, "p_valor": p, "base_ok": p > 0.05, "pool_final": pool_final, "score_final": score_final}, pipeline_update=pool_final)
 
             top_lift_auto = lift_top_pairs(st_tuple, ref_idx=ref, janela=min(200, len(sorteios)), top=20)
-            salvar_etapa("nivel1", {
+            dados_n1_auto = {
                 "df": metricas_n1["df"],
                 "bonus": metricas_n1["bonus"],
                 "kl_div": metricas_n1["kl_div"],
@@ -1804,13 +1896,18 @@ with tabs[14]:
                 "kurt_recent": metricas_n1["kurt_recent"],
                 "auc": auc_n1,
                 "top_lift": top_lift_auto,
-            }, pipeline_update=pool_final)
+            }
+            analise_tmp = dict(st.session_state["analise"])
+            analise_tmp["nivel1"] = dados_n1_auto
+            oficial = recalcular_score_oficial_n1(sorteios, janela, ref, threshold, analise_tmp)
+            dados_n1_auto.update(oficial)
+            salvar_etapa("nivel1", dados_n1_auto, pipeline_update=oficial["pool_final_oficial"])
             st.rerun()
 
     else:
         analise = st.session_state["analise"]
-        pool_final = analise["monte_carlo"]["pool_final"]
-        score_final = analise["monte_carlo"]["score_final"]
+        pool_final = analise["nivel1"]["pool_final_oficial"] if etapa_ok("nivel1") and "pool_final_oficial" in analise["nivel1"] else analise["monte_carlo"]["pool_final"]
+        score_final = analise["nivel1"]["score_final_oficial"] if etapa_ok("nivel1") and "score_final_oficial" in analise["nivel1"] else analise["monte_carlo"]["score_final"]
         vencidas_g = analise["atraso"]["vencidas"]
         fortes_g = analise["n12"]["fortes"]
         apoio_g = analise["n12"]["apoio"]
@@ -1819,6 +1916,7 @@ with tabs[14]:
         perfil_nome = st.radio("Perfil", list(PERFIS.keys()), horizontal=True)
         perfil = PERFIS[perfil_nome]
         st.info(perfil["descricao"])
+        st.caption("Nesta versão, o perfil altera cobertura e travas da carteira. O score oficial vem da análise concluída na Etapa 9.")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1840,19 +1938,9 @@ with tabs[14]:
                 random.seed(seed)
                 np.random.seed(seed)
 
-            prog = st.progress(0, text="Calculando scores...")
-            scores, fortes_calc, apoio_calc, vencidas_calc, _ = calcular_scores(
-                sorteios,
-                janela,
-                ref,
-                threshold,
-                perfil["pesos"],
-                analise,
-                usar_nivel1=etapa_ok("nivel1"),
-                bonus_n1=analise["nivel1"]["bonus"] if etapa_ok("nivel1") else metricas_n1["bonus"],
-            )
-
-            ranking = sorted(scores.items(), key=lambda x: -x[1])
+            prog = st.progress(0, text="Carregando score oficial da análise...")
+            scores = dict(score_final)
+            ranking = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
             pool_obrig = list(dict.fromkeys(vencidas_g))
             pool_score = [n for n, _ in ranking if n not in pool_obrig]
 
@@ -1874,7 +1962,8 @@ with tabs[14]:
                 if f not in pool:
                     pool.append(f)
 
-            st.write(f"**Pool ({len(pool)}):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
+            st.write(f"**Pool oficial base ({len(pool_final)}):** {' · '.join(f'{n:02d}' for n in pool_final[:25])}")
+            st.write(f"**Pool usado na carteira ({len(pool)}):** {' · '.join(f'{n:02d}' for n in sorted(pool))}")
 
             st.caption(
                 f"Pool={len(pool)} | interseção mínima possível entre 2 jogos de 15 = {max(0, 30 - len(pool))}"
@@ -2011,7 +2100,7 @@ with tabs[14]:
                     c7.write(f"Mold/Miolo:{mold}/{miolo}")
                     c8.write(f"Primos:{c['primos']} | Fib:{c['fibonacci']} | Seq:{mx_j}")
 
-                    st.success("✅ Aprovado — filtros V4.4")
+                    st.success("✅ Aprovado — filtros V4.5.1")
                     st.markdown("---")
 
                 if len(jogos) > 1:
