@@ -12,7 +12,7 @@ from io import StringIO
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Protocolo Hard V4.2", layout="wide")
+st.set_page_config(page_title="Protocolo Hard V4.3", layout="wide")
 
 COLS_DEZENAS = [f"bola {i}" for i in range(1, 16)]
 PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23}
@@ -72,15 +72,15 @@ PERFIS = {
     "🎯 Agressiva": {
         "pesos": {"g1": 0.34, "g2": 0.26, "g3": 0.22, "g4": 0.10, "g5": 0.08},
         "top_pool": 24,
-        "max_comum": 9,
+        "max_comum": 10,
         "descricao": "Mais forte, mas sem travar o motor por impossibilidade combinatória.",
         "aviso": 8,
     },
     "⚖️ Híbrida": {
         "pesos": {"g1": 0.30, "g2": 0.24, "g3": 0.24, "g4": 0.12, "g5": 0.10},
-        "top_pool": 22,
-        "max_comum": 10,
-        "descricao": "Cobertura mais ampla, com semelhança controlada sem inviabilizar geração.",
+        "top_pool": 25,
+        "max_comum": 12,
+        "descricao": "Cobertura ampla para carteira maior, com semelhança controlada e pool mais respirável.",
         "aviso": None,
     },
 }
@@ -699,7 +699,7 @@ def calcular_scores(sorteios, janela, ref, threshold, pesos, analise):
 # ============================================================
 # UI - BASE
 # ============================================================
-st.sidebar.title("⚙️ Protocolo Hard V4.2")
+st.sidebar.title("⚙️ Protocolo Hard V4.3")
 
 uploaded = st.sidebar.file_uploader("Base CSV da Lotofácil", type=["csv"])
 
@@ -778,7 +778,7 @@ sorteios_j = sorteios[-janela:]
 # ============================================================
 # TOPO
 # ============================================================
-st.title("📊 Protocolo Hard V4.2 — Lotofácil")
+st.title("📊 Protocolo Hard V4.3 — Lotofácil")
 st.markdown(
     f"Base: **{len(sorteios)} concursos** | "
     f"C{df['Concurso'].min()}–C{df['Concurso'].max()} | "
@@ -1326,7 +1326,7 @@ with tabs[12]:
 # GERADOR
 # ============================================================
 with tabs[13]:
-    st.header("🎰 Gerador — Protocolo Hard V4.2")
+    st.header("🎰 Gerador — Protocolo Hard V4.3")
 
     if not todas_ok():
         st.error(f"⛔ {tot-ok} etapa(s) pendente(s)")
@@ -1469,9 +1469,9 @@ with tabs[13]:
             pool_score = [n for n, _ in ranking if n not in pool_obrig]
 
             if "Agressiva" in perfil_nome:
-                pool_din = max(perfil["top_pool"], min(qtd + 3, 22))
+                pool_din = max(perfil["top_pool"], min(qtd + 4, 24))
             else:
-                pool_din = max(perfil["top_pool"], min(qtd + 5, 25))
+                pool_din = max(perfil["top_pool"], min(qtd + 8, 25))
 
             sorteio_anterior = sorteios[ref]
             familias = [
@@ -1508,16 +1508,28 @@ with tabs[13]:
             prog.progress(10, text="Gerando com repetição e estrutura...")
             while len(jogos) < qtd and tent < max_t:
                 tent += 1
-                meta = familias[min(len(jogos), len(familias) - 1)]
+                meta = familias[len(jogos) % len(familias)]
 
                 base = fixas[:15]
                 obrigatorias_jogo = []
-                if vencidas_g:
-                    obrigatorias_jogo.extend(vencidas_g[:1])
-                if fortes_g:
-                    obrigatorias_jogo.extend(sorted(list(fortes_g))[:2])
-                if apoio_g and len(obrigatorias_jogo) < 4:
-                    obrigatorias_jogo.extend(sorted(list(apoio_g))[:1])
+                idx_rot = len(jogos)
+                v_pool = sorted(list(vencidas_g)) if vencidas_g else []
+                f_pool = sorted(list(fortes_g)) if fortes_g else []
+                a_pool = sorted(list(apoio_g)) if apoio_g else []
+
+                if v_pool:
+                    obrigatorias_jogo.append(v_pool[idx_rot % len(v_pool)])
+
+                if len(f_pool) >= 2:
+                    obrigatorias_jogo.append(f_pool[idx_rot % len(f_pool)])
+                    obrigatorias_jogo.append(f_pool[(idx_rot + 1) % len(f_pool)])
+                elif len(f_pool) == 1:
+                    obrigatorias_jogo.append(f_pool[0])
+
+                if a_pool:
+                    obrigatorias_jogo.append(a_pool[idx_rot % len(a_pool)])
+
+                obrigatorias_jogo = list(dict.fromkeys(obrigatorias_jogo))
 
                 for n in obrigatorias_jogo:
                     if n not in base and len(base) < 15:
@@ -1529,7 +1541,7 @@ with tabs[13]:
                     rest += ext
 
                 faltam = 15 - len(base)
-                universo = rest[:max(faltam + 12, 18)]
+                universo = rest[:max(faltam + 14, 22)]
                 rest_sc = np.array([scores[n] for n in universo], dtype=float)
                 rest_sc = rest_sc / rest_sc.sum()
 
@@ -1568,7 +1580,7 @@ with tabs[13]:
             prog.progress(100, text="Concluído")
 
             if len(jogos) < qtd:
-                st.warning(f"Gerados {len(jogos)}/{qtd}. Ajuste o perfil ou a seed.")
+                st.warning(f"Gerados {len(jogos)}/{qtd}. O motor ficou mais seletivo que a carteira pedida.")
 
             if jogos:
                 st.success(f"✅ {len(jogos)} combinação(ões) — {tent:,} tentativas")
@@ -1611,7 +1623,7 @@ with tabs[13]:
                     c7.write(f"Mold/Miolo:{mold}/{miolo}")
                     c8.write(f"Primos:{c['primos']} | Fib:{c['fibonacci']} | Seq:{mx_j}")
 
-                    st.success("✅ Aprovado — filtros V4.2")
+                    st.success("✅ Aprovado — filtros V4.3")
                     st.markdown("---")
 
                 if len(jogos) > 1:
