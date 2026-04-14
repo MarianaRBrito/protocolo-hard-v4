@@ -701,13 +701,37 @@ def calcular_scores(sorteios, janela, ref, threshold, pesos, analise):
 # ============================================================
 st.sidebar.title("⚙️ Protocolo Hard V4.3")
 
-uploaded = st.sidebar.file_uploader("Base CSV da Lotofácil", type=["csv"])
+if "base_source" not in st.session_state:
+    st.session_state["base_source"] = "local"
 
-try:
-    df = carregar_base_upload(uploaded)
-except Exception as e:
-    st.error(f"Falha ao carregar a base: {e}")
-    st.stop()
+uploaded = st.sidebar.file_uploader("Base CSV da Lotofácil", type=["csv"], key="uploader_base")
+
+if uploaded is not None:
+    try:
+        df_upload = carregar_base_upload(uploaded)
+        st.session_state["base_df"] = df_upload
+        st.session_state["base_source"] = f"upload: {uploaded.name}"
+        st.sidebar.success(f"Base carregada do upload: {uploaded.name}")
+        st.sidebar.caption(f"{len(df_upload)} concursos | C{df_upload['Concurso'].min()}–C{df_upload['Concurso'].max()}")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao ler upload: {e}")
+
+if st.session_state["base_df"] is not None:
+    df = st.session_state["base_df"]
+else:
+    try:
+        df = carregar_base_local()
+        st.session_state["base_source"] = "local"
+    except Exception as e:
+        st.error(f"Falha ao carregar a base local: {e}")
+        st.stop()
+
+if st.sidebar.button("Usar base local novamente"):
+    st.session_state["base_df"] = None
+    st.session_state["base_source"] = "local"
+    st.rerun()
+
+st.sidebar.caption(f"Fonte ativa: {st.session_state['base_source']}")
 
 with st.sidebar.expander("➕ Atualização manual da base"):
     concurso_manual = st.number_input("Concurso novo", min_value=1, value=int(df["Concurso"].max()) + 1, step=1)
@@ -718,12 +742,11 @@ with st.sidebar.expander("➕ Atualização manual da base"):
             dezenas = sorted([int(x) for x in dezenas_manual.strip().split()])
             df = incorporar_resultado_manual(df, int(concurso_manual), data_manual, dezenas)
             st.session_state["base_df"] = df
+            st.session_state["base_source"] = f"{st.session_state['base_source']} + manual"
             st.success(f"Resultado do concurso {int(concurso_manual)} incorporado.")
+            st.rerun()
         except Exception as e:
             st.error(f"Não foi possível incorporar: {e}")
-
-if st.session_state["base_df"] is not None:
-    df = st.session_state["base_df"]
 
 sorteios = extrair_sorteios(df)
 st_tuple = tuple(tuple(s) for s in sorteios)
@@ -780,6 +803,7 @@ sorteios_j = sorteios[-janela:]
 # ============================================================
 st.title("📊 Protocolo Hard V4.3 — Lotofácil")
 st.markdown(
+    f"Fonte: **{st.session_state.get('base_source', 'local')}** | "
     f"Base: **{len(sorteios)} concursos** | "
     f"C{df['Concurso'].min()}–C{df['Concurso'].max()} | "
     f"Ref UI: **{ref_ui}** | Concurso ref: **C{df.iloc[ref]['Concurso']}** | "
