@@ -12,7 +12,7 @@ from io import StringIO
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Protocolo Hard V4.3", layout="wide")
+st.set_page_config(page_title="Protocolo Hard V4.4", layout="wide")
 
 COLS_DEZENAS = [f"bola {i}" for i in range(1, 16)]
 PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23}
@@ -521,6 +521,238 @@ def auditoria_portfolio(jogos, fortes, apoio, vencidas, sorteio_anterior):
     }
 
 
+
+def auc_rank(y_true, scores):
+    y = np.asarray(y_true, dtype=int)
+    s = np.asarray(scores, dtype=float)
+    pos = y.sum()
+    neg = len(y) - pos
+    if pos == 0 or neg == 0:
+        return 0.5
+    order = np.argsort(s)
+    ranks = np.empty_like(order, dtype=float)
+    ranks[order] = np.arange(1, len(s) + 1)
+    auc = (ranks[y == 1].sum() - pos * (pos + 1) / 2) / (pos * neg)
+    return float(auc)
+
+
+def _binary_matrix(sorteios):
+    M = np.zeros((len(sorteios), 25), dtype=int)
+    for i, s in enumerate(sorteios):
+        for n in s:
+            M[i, n - 1] = 1
+    return M
+
+
+def ljung_box_pvalue(series, lags=5):
+    x = np.asarray(series, dtype=float)
+    n = len(x)
+    if n < max(20, lags + 5):
+        return 1.0, 0.0
+    x = x - x.mean()
+    var = np.dot(x, x)
+    if var <= 1e-12:
+        return 1.0, 0.0
+    acfs = []
+    for k in range(1, lags + 1):
+        acf = np.dot(x[k:], x[:-k]) / var
+        acfs.append(acf)
+    Q = n * (n + 2) * sum((acf ** 2) / (n - k) for k, acf in enumerate(acfs, start=1))
+    p = 1 - stats.chi2.cdf(Q, df=lags)
+    return float(p), float(acfs[0] if acfs else 0.0)
+
+
+def rolling_sum(arr, window=10):
+    arr = np.asarray(arr, dtype=float)
+    if len(arr) < window:
+        return np.array([])
+    cs = np.cumsum(np.insert(arr, 0, 0))
+    return cs[window:] - cs[:-window]
+
+
+@st.cache_data
+def nivel1_metricas(sorteios_tuple, ref_idx, recent=24, hist=200, n_boot=250, n_perm=250):
+    sorteios = list(sorteios_tuple)
+    base = sorteios[: ref_idx + 1]
+    hist_n = min(hist, len(base))
+    recent_n = min(recent, len(base))
+    base_hist = base[-hist_n:]
+    base_recent = base[-recent_n:]
+    M_hist = _binary_matrix(base_hist)
+    M_recent = _binary_matrix(base_recent)
+    recent_freq = M_recent.mean(axis=0)
+    hist_freq = M_hist.mean(axis=0)
+
+    # Bootstrap frequency intervals on recent window
+    if len(M_recent) > 0:
+        rng = np.random.default_rng(42)
+        boot = np.zeros((n_boot, 25), dtype=float)
+        for b in range(n_boot):
+            idx = rng.integers(0, len(M_recent), size=len(M_recent))
+            boot[b] = M_recent[idx].mean(axis=0)
+        boot_low = np.percentile(boot, 10, axis=0)
+        boot_high = np.percentile(boot, 90, axis=0)
+    else:
+        boot_low = np.zeros(25)
+        boot_high = np.zeros(25)
+
+    # Permutation / resampling style significance: compare recent count vs random subsets of historic window
+    rngp = np.random.default_rng(123)
+    recent_count = M_recent.sum(axis=0)
+    perm_sig = np.zeros(25)
+    for j in range(25):
+        obs = recent_count[j]
+        sampled = []
+        if len(M_hist) > 0:
+            for _ in range(n_perm):
+                idx = rngp.choice(len(M_hist), size=recent_n, replace=False if recent_n <= len(M_hist) else True)
+                sampled.append(M_hist[idx, j].sum())
+            sampled = np.asarray(sampled)
+            if obs >= sampled.mean():
+                p_up = (np.sum(sampled >= obs) + 1) / (len(sampled) + 1)
+                perm_sig[j] = max(0.0, 1 - p_up)
+            else:
+                perm_sig[j] = 0.0
+
+    # CUSUM positive drift
+    cusum = np.zeros(25)
+    ks_shift = np.zeros(25)
+    lb_sig = np.zeros(25)
+    for j in range(25):
+        serie = M_hist[:, j].astype(float)
+        if len(serie) > 10:
+            mu = serie.mean()
+            csum = np.cumsum(serie - mu)
+            cusum[j] = max(0.0, float(csum.max() - csum.min()))
+            roll_hist = rolling_sum(serie[:-recent_n] if len(serie) > recent_n else serie, window=min(10, max(3, recent_n // 2)))
+            roll_recent = rolling_sum(serie[-recent_n:], window=min(10, max(3, recent_n // 2)))
+            if len(roll_hist) >= 5 and len(roll_recent) >= 5:
+                _, pks = stats.ks_2samp(roll_recent, roll_hist)
+                if recent_freq[j] > hist_freq[j]:
+                    ks_shift[j] = max(0.0, 1 - float(pks))
+            p_lb, acf1 = ljung_box_pvalue(serie, lags=min(5, max(1, len(serie) // 10)))
+            if acf1 > 0:
+                lb_sig[j] = max(0.0, 1 - p_lb)
+
+    # Lift with reference draw
+    ref_draw = set(base[-1]) if base else set()
+    pa = M_hist.mean(axis=0)
+    lift_ref = np.zeros(25)
+    if len(M_hist) > 0 and ref_draw:
+        for n in range(1, 26):
+            vals = []
+            for m in ref_draw:
+                if m == n:
+                    continue
+                joint = np.mean(M_hist[:, n - 1] * M_hist[:, m - 1])
+                denom = max(pa[n - 1] * pa[m - 1], 1e-9)
+                vals.append(joint / denom)
+            lift_ref[n - 1] = np.mean(vals) if vals else 1.0
+
+    # Global metrics
+    eps = 1e-9
+    p_recent = recent_freq + eps
+    p_recent = p_recent / p_recent.sum()
+    p_hist = hist_freq + eps
+    p_hist = p_hist / p_hist.sum()
+    kl = float(np.sum(p_recent * np.log(p_recent / p_hist)))
+    ks_global = float(stats.ks_2samp(recent_freq, hist_freq).pvalue)
+    skew_recent = float(stats.skew(recent_freq))
+    kurt_recent = float(stats.kurtosis(recent_freq))
+
+    # Normalize per-dezena advanced bonus
+    adv_parts = {
+        "boot_low": {i + 1: float(boot_low[i]) for i in range(25)},
+        "perm_sig": {i + 1: float(perm_sig[i]) for i in range(25)},
+        "cusum": {i + 1: float(cusum[i]) for i in range(25)},
+        "ks_shift": {i + 1: float(ks_shift[i]) for i in range(25)},
+        "lb_sig": {i + 1: float(lb_sig[i]) for i in range(25)},
+        "lift_ref": {i + 1: float(lift_ref[i]) for i in range(25)},
+    }
+    adv_norm = {k: normalizar(v) for k, v in adv_parts.items()}
+    bonus = {}
+    for n in range(1, 26):
+        bonus[n] = (
+            0.25 * adv_norm["boot_low"][n]
+            + 0.25 * adv_norm["perm_sig"][n]
+            + 0.20 * adv_norm["cusum"][n]
+            + 0.10 * adv_norm["ks_shift"][n]
+            + 0.10 * adv_norm["lb_sig"][n]
+            + 0.10 * adv_norm["lift_ref"][n]
+        )
+
+    df = pd.DataFrame({
+        "Dezena": list(range(1, 26)),
+        "Freq Recente %": np.round(recent_freq * 100, 1),
+        "Freq Hist %": np.round(hist_freq * 100, 1),
+        "Bootstrap p10": np.round(boot_low * 100, 1),
+        "Bootstrap p90": np.round(boot_high * 100, 1),
+        "Perm Sig": np.round(perm_sig, 4),
+        "CUSUM": np.round(cusum, 4),
+        "KS Shift": np.round(ks_shift, 4),
+        "LB Sig": np.round(lb_sig, 4),
+        "Lift Ref": np.round(lift_ref, 4),
+        "Bonus N1": np.round([bonus[n] for n in range(1, 26)], 4),
+    }).sort_values(["Bonus N1", "Freq Recente %"], ascending=[False, False]).reset_index(drop=True)
+
+    return {
+        "df": df,
+        "bonus": bonus,
+        "kl_div": kl,
+        "ks_global_p": ks_global,
+        "skew_recent": skew_recent,
+        "kurt_recent": kurt_recent,
+        "top_bonus": df.head(10)["Dezena"].tolist(),
+    }
+
+
+@st.cache_data
+def lift_top_pairs(sorteios_tuple, ref_idx, janela=200, top=20):
+    sorteios = list(sorteios_tuple)
+    base = sorteios[: ref_idx + 1]
+    window = base[-min(janela, len(base)):]
+    M = _binary_matrix(window)
+    p = M.mean(axis=0)
+    rows = []
+    for a, b in combinations(range(1, 26), 2):
+        joint = np.mean(M[:, a - 1] * M[:, b - 1])
+        denom = max(p[a - 1] * p[b - 1], 1e-9)
+        lift = joint / denom
+        rows.append((a, b, joint, lift))
+    rows.sort(key=lambda x: x[3], reverse=True)
+    return rows[:top]
+
+
+@st.cache_data
+def auc_criterios_nivel1(sorteios_tuple, janela_eval=250):
+    sorteios = list(sorteios_tuple)
+    ini = max(80, len(sorteios) - janela_eval - 1)
+    ys = []
+    sc_freq24 = []
+    sc_atraso = []
+    sc_shift = []
+    for t in range(ini, len(sorteios) - 1):
+        hist = sorteios[: t + 1]
+        nxt = set(sorteios[t + 1])
+        f24 = freq_simples(hist, min(24, len(hist)))
+        f100 = freq_simples(hist, min(100, len(hist)))
+        atrasos_df = calcular_atrasos(hist)
+        atraso_map = dict(zip(atrasos_df["Dezena"], atrasos_df["Atraso"]))
+        shift_map = {}
+        for n in range(1, 26):
+            shift_map[n] = (f24[n] / min(24, len(hist))) - (f100[n] / min(100, len(hist)))
+        for n in range(1, 26):
+            ys.append(1 if n in nxt else 0)
+            sc_freq24.append(f24[n])
+            sc_atraso.append(atraso_map[n])
+            sc_shift.append(shift_map[n])
+    return {
+        "Freq24": round(auc_rank(ys, sc_freq24), 4),
+        "Atraso": round(auc_rank(ys, sc_atraso), 4),
+        "Shift24x100": round(auc_rank(ys, sc_shift), 4),
+    }
+
+
 # ============================================================
 # CALIBRAÇÃO E FILTROS
 # ============================================================
@@ -620,7 +852,7 @@ def filtrar(
 # ============================================================
 # SCORE
 # ============================================================
-def calcular_scores(sorteios, janela, ref, threshold, pesos, analise):
+def calcular_scores(sorteios, janela, ref, threshold, pesos, analise, usar_nivel1=False, bonus_n1=None):
     g1 = {n: 0.0 for n in range(1, 26)}
     if analise.get("termica"):
         quentes = analise["termica"]["quentes"]
@@ -683,7 +915,7 @@ def calcular_scores(sorteios, janela, ref, threshold, pesos, analise):
     G4 = normalizar({n: 1 - abs(freq_all[n] / tot - 1 / 25) / (1 / 25) for n in range(1, 26)})
     G5 = normalizar({n: freq_all[n] / tot for n in range(1, 26)})
 
-    scores = {
+    base_scores = {
         n: (
             pesos["g1"] * G1[n]
             + pesos["g2"] * G2[n]
@@ -693,13 +925,17 @@ def calcular_scores(sorteios, janela, ref, threshold, pesos, analise):
         )
         for n in range(1, 26)
     }
+    if usar_nivel1 and bonus_n1:
+        scores = {n: 0.88 * base_scores[n] + 0.12 * bonus_n1.get(n, 0.0) for n in range(1, 26)}
+    else:
+        scores = base_scores
     return scores, fortes_n, apoio_n, vencidas, no_ciclo
 
 
 # ============================================================
 # UI - BASE
 # ============================================================
-st.sidebar.title("⚙️ Protocolo Hard V4.3")
+st.sidebar.title("⚙️ Protocolo Hard V4.4")
 
 if "base_source" not in st.session_state:
     st.session_state["base_source"] = "local"
@@ -755,9 +991,12 @@ janela = st.sidebar.slider("Janela de análise", 50, len(sorteios), min(500, len
 threshold = st.sidebar.slider("Threshold N+1/N+2 (%)", 50, 100, 80)
 ref_ui = st.sidebar.number_input("Índice Referência (0=último)", 0, len(sorteios) - 1, 0)
 ref = concurso_ref_ui_to_idx(ref_ui, len(sorteios))
+ativar_nivel1 = st.sidebar.checkbox("Ativar filtros Nível 1 no score", value=True)
 
 verificar_params(janela, threshold, ref_ui)
 cfg = calibrar(st_tuple)
+metricas_n1 = nivel1_metricas(st_tuple, ref_idx=ref, recent=min(24, len(sorteios)), hist=min(200, len(sorteios)))
+auc_n1 = auc_criterios_nivel1(st_tuple, janela_eval=min(250, max(80, len(sorteios) - 2)))
 
 with st.sidebar.expander("📐 Filtros calibrados"):
     st.write(f"Soma: {cfg['soma_min']}–{cfg['soma_max']}")
@@ -766,6 +1005,7 @@ with st.sidebar.expander("📐 Filtros calibrados"):
     st.write(f"Moldura: {cfg['mold_min']}–{cfg['mold_max']}")
     st.write(f"Máx seq: {cfg['max_seq']} | Máx faixa: {cfg['max_faixa']} | Máx quinteto: {cfg['quint_max']}")
     st.write(f"Máx primos: {cfg['max_primo']} | Máx fib: {cfg['max_fib']}")
+    st.caption(f"Nível 1: {'ativo' if ativar_nivel1 else 'desligado'} | KL={metricas_n1['kl_div']:.4f}")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📋 Status do protocolo")
@@ -801,7 +1041,7 @@ sorteios_j = sorteios[-janela:]
 # ============================================================
 # TOPO
 # ============================================================
-st.title("📊 Protocolo Hard V4.3 — Lotofácil")
+st.title("📊 Protocolo Hard V4.4 — Lotofácil")
 st.markdown(
     f"Fonte: **{st.session_state.get('base_source', 'local')}** | "
     f"Base: **{len(sorteios)} concursos** | "
@@ -832,6 +1072,7 @@ tabs = st.tabs([
     "🧪 Filtros",
     "📈 Tendência",
     "⚖️ EV",
+    "🧠 Nível 1",
     "🏆 Relatório",
     "🎰 Gerar",
 ])
@@ -1303,9 +1544,56 @@ with tabs[11]:
     ]), use_container_width=True, hide_index=True)
 
 # ============================================================
-# RELATÓRIO
+# NÍVEL 1 — FILTROS AVANÇADOS
 # ============================================================
 with tabs[12]:
+    st.header("🧠 Nível 1 — Filtros avançados")
+    st.caption("Implementados: Bootstrap, Permutation, CUSUM, KS, Ljung-Box, KL-divergência, Skewness/Curtose, Lift, ROC/AUC e Kelly informacional.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("KL div", round(metricas_n1["kl_div"], 4))
+    c2.metric("KS global p", round(metricas_n1["ks_global_p"], 4))
+    c3.metric("Skewness", round(metricas_n1["skew_recent"], 4))
+    c4.metric("Curtose", round(metricas_n1["kurt_recent"], 4))
+
+    st.subheader("AUC dos critérios")
+    st.dataframe(pd.DataFrame([auc_n1]), use_container_width=True, hide_index=True)
+
+    st.subheader("Top pares por Lift")
+    top_lift = lift_top_pairs(st_tuple, ref_idx=ref, janela=min(200, len(sorteios)), top=20)
+    st.dataframe(
+        pd.DataFrame([
+            {"Par": f"{a:02d}+{b:02d}", "Joint": round(joint, 4), "Lift": round(lift, 4)}
+            for a, b, joint, lift in top_lift
+        ]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Ranking por bônus Nível 1")
+    st.dataframe(metricas_n1["df"], use_container_width=True, hide_index=True)
+
+    st.subheader("Kelly informacional")
+    banca = st.number_input("Banca simulada (R$)", min_value=1.0, value=100.0, step=10.0, key="banca_kelly")
+    krows = []
+    for faixa in [11, 12, 13, 14, 15]:
+        p = PROB[faixa]
+        b = max(PREMIOS[faixa] / 3.5 - 1, 0)
+        q = 1 - p
+        frac = max(0.0, (b * p - q) / b) if b > 0 else 0.0
+        krows.append({
+            "Faixa": faixa,
+            "Prob.": p,
+            "Kelly %": round(frac * 100, 6),
+            "Aposta sugerida (R$)": round(frac * banca, 4),
+        })
+    st.dataframe(pd.DataFrame(krows), use_container_width=True, hide_index=True)
+
+
+# ============================================================
+# RELATÓRIO
+# ============================================================
+with tabs[13]:
     st.header("🏆 Relatório final")
     analise = st.session_state["analise"]
     ok, tot = status_count()
@@ -1327,7 +1615,8 @@ with tabs[12]:
         if etapa_ok("monte_carlo"):
             d = analise["monte_carlo"]
             for i, n in enumerate(d["pool_final"][:20]):
-                st.write(f"#{i+1} {n:02d} — score {d['score_final'][n]}")
+                extra = f" | N1 {metricas_n1['df'].set_index('Dezena').loc[n, 'Bonus N1']:.4f}" if ativar_nivel1 else ""
+                st.write(f"#{i+1} {n:02d} — score {d['score_final'][n]}{extra}")
 
     if st.session_state["jogos_gerados"]:
         st.subheader("🩺 Auditoria do portfólio")
@@ -1349,8 +1638,8 @@ with tabs[12]:
 # ============================================================
 # GERADOR
 # ============================================================
-with tabs[13]:
-    st.header("🎰 Gerador — Protocolo Hard V4.3")
+with tabs[14]:
+    st.header("🎰 Gerador — Protocolo Hard V4.4")
 
     if not todas_ok():
         st.error(f"⛔ {tot-ok} etapa(s) pendente(s)")
@@ -1485,7 +1774,14 @@ with tabs[13]:
 
             prog = st.progress(0, text="Calculando scores...")
             scores, fortes_calc, apoio_calc, vencidas_calc, _ = calcular_scores(
-                sorteios, janela, ref, threshold, perfil["pesos"], analise
+                sorteios,
+                janela,
+                ref,
+                threshold,
+                perfil["pesos"],
+                analise,
+                usar_nivel1=ativar_nivel1,
+                bonus_n1=metricas_n1["bonus"],
             )
 
             ranking = sorted(scores.items(), key=lambda x: -x[1])
@@ -1647,7 +1943,7 @@ with tabs[13]:
                     c7.write(f"Mold/Miolo:{mold}/{miolo}")
                     c8.write(f"Primos:{c['primos']} | Fib:{c['fibonacci']} | Seq:{mx_j}")
 
-                    st.success("✅ Aprovado — filtros V4.3")
+                    st.success("✅ Aprovado — filtros V4.4")
                     st.markdown("---")
 
                 if len(jogos) > 1:
