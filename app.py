@@ -1204,10 +1204,10 @@ class AnalisadorLotofacil:
         """Calcula scores consolidados (62 análises)"""
         scores = {n: 0 for n in range(1, 26)}
         
-        # 01. Frequência
+        # 01. Frequência (AGRESSIVO: peso 20 em vez de 10)
         freq = self.analise_01_frequencia_simples()
         for n in range(1, 26):
-            scores[n] += (freq[n] / self.n_sorteios) * 10
+            scores[n] += (freq[n] / self.n_sorteios) * 20
         
         # 02. Janelas
         janelas = self.analise_02_frequencia_janelas()
@@ -1222,6 +1222,10 @@ class AnalisadorLotofacil:
                 scores[n] += 8
             elif atrasos[n] > percentis['p75']:
                 scores[n] += 4
+            
+            # COMANDO 2 (AGRESSIVO): Penalizar números muito frios
+            if atrasos[n] > percentis['p95']:
+                scores[n] -= 5  # Penaliza números muito atrasados
             
             ciclo_esperado = 1.7
             ciclo_desvio = abs(ciclos[n] - ciclo_esperado)
@@ -1246,15 +1250,15 @@ class AnalisadorLotofacil:
         for n in MULTIPLOS_3:
             scores[n] += 1
         
-        # 16-17. Coocorrência
+        # 16-17. Coocorrência (AGRESSIVO: peso 5 em vez de 2)
         pares_freq, trios_freq = self.analise_16_17_coocorrencia()
         for (a, b), count in pares_freq.most_common(30):
-            peso = (count / self.n_sorteios) * 2
+            peso = (count / self.n_sorteios) * 5  # AGRESSIVO: 2.5x mais forte
             scores[a] += peso
             scores[b] += peso
         
         for trio, count in trios_freq.most_common(20):
-            peso = (count / self.n_sorteios) * 1.5
+            peso = (count / self.n_sorteios) * 4  # AGRESSIVO: aumentado também
             for n in trio:
                 scores[n] += peso
         
