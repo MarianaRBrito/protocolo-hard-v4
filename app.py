@@ -570,20 +570,20 @@ tabs = st.tabs([
     "6️⃣ N+1/N+2",
     "7️⃣ Coocorrência",
     "8️⃣ Monte Carlo",
-    "📊 Backtesting",
     "🧪 Filtros",
     "📈 Tendência",
     "⚖️ EV",
     "🧠 Nível 1",
-    "🏆 Relatório",
-    "📊 Resumo Executivo",  # ← NOVA ABA (posição 14)
-    "🎰 Gerar",
+    "📊 Resumo Executivo",  # 12 - NOVA ABA (Números consolidados)
+    "📊 Backtesting",        # 13 - Backtesting ANTES de Relatório
+    "🏆 Relatório",          # 14 - Relatório com todas as análises
+    "🎰 Gerar",              # 15 - Gerar no final
 ])
 
 # ============================================================
-# ABA 15: RESUMO EXECUTIVO (NOVA!) ← ADICIONAR AQUI
+# ABA 12: RESUMO EXECUTIVO (NOVA!) ← Números consolidados
 # ============================================================
-with tabs[14]:
+with tabs[12]:
     st.subheader("📊 Resumo Executivo — 62 Análises Consolidadas")
     st.markdown("**Números recomendados baseados em 62 critérios estatísticos**")
     
@@ -637,7 +637,143 @@ with tabs[14]:
         st.metric("Score máximo", f"{max(scores_62.values()):.1f}%")
 
 # ============================================================
-# ABA 16: GERAR (original, mantido igual)
+# ABA 13: BACKTESTING
+# ============================================================
+with tabs[13]:
+    st.subheader("📊 Backtesting")
+    st.markdown("Teste seus jogos contra sorteios passados")
+    
+    if jogos_bt:
+        st.write(f"**{len(jogos_bt)} jogo(s) para análise**")
+        for i, jogo in enumerate(jogos_bt, 1):
+            st.write(f"**Jogo {i}:** {' '.join(str(n).zfill(2) for n in jogo)}")
+        
+        st.markdown("---")
+        st.write(f"Analisando contra **{len(sorteios_j)} sorteios** (últimos {janela})")
+        
+        for idx, jogo in enumerate(jogos_bt, 1):
+            acertos_list = []
+            for sorteio in sorteios_j:
+                acertos = len(set(jogo) & set(sorteio))
+                acertos_list.append(acertos)
+            
+            acertos_array = np.array(acertos_list)
+            
+            st.write(f"**Jogo {idx}:**")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("Média", f"{acertos_array.mean():.1f}")
+            with col2:
+                st.metric("Max", f"{acertos_array.max():.0f}")
+            with col3:
+                st.metric("Min", f"{acertos_array.min():.0f}")
+            with col4:
+                st.metric("≥11", f"{sum(acertos_array >= 11)}")
+            with col5:
+                st.metric("≥13", f"{sum(acertos_array >= 13)}")
+    else:
+        st.info("ℹ️ Digite 3 jogos na barra lateral para testar")
+
+# ============================================================
+# ABA 14: RELATÓRIO (expandido com todas as análises!)
+# ============================================================
+with tabs[14]:
+    st.subheader("🏆 Relatório Consolidado — Todas as Análises")
+    st.markdown("**Painel completo com informações de todas as 62 análises**")
+    
+    # Rodar as 62 análises
+    analisador = AnalisadorLotofacil(sorteios)
+    scores_62 = analisador.calcular_scores()
+    freq = analisador.analise_01_frequencia_simples()
+    atrasos, ciclos, percentis = analisador.analise_03_05_atraso_e_ciclo()
+    pares_freq, trios_freq = analisador.analise_16_17_coocorrencia()
+    markov = analisador.analise_18_markov()
+    
+    # ═══════════════════════════════════════════════════════
+    # SEÇÃO 1: FREQUÊNCIA
+    # ═══════════════════════════════════════════════════════
+    st.markdown("## 🔴 FREQUÊNCIA")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("**Top 10 Quentes**")
+        quentes = [n for n, _ in freq.most_common(10)]
+        st.code(f"{' '.join(str(n).zfill(2) for n in quentes)}")
+    
+    with col2:
+        st.warning("**Bot 5 Frias**")
+        frias = [n for n, _ in freq.most_common(25)[-5:]]
+        st.code(f"{' '.join(str(n).zfill(2) for n in frias)}")
+    
+    with col3:
+        st.metric("Mais frequente", f"{freq.most_common(1)[0][0]:02d}")
+    
+    # ═══════════════════════════════════════════════════════
+    # SEÇÃO 2: ATRASO
+    # ═══════════════════════════════════════════════════════
+    st.markdown("## ⏱️ ATRASO")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("**Top 5 Vencidas**")
+        vencidas = sorted(range(1, 26), key=lambda n: -atrasos[n])[:5]
+        st.code(f"{' '.join(str(n).zfill(2) for n in vencidas)}")
+    
+    with col2:
+        st.metric("Atraso máximo", f"{max(atrasos.values()):.0f} sorteios")
+    
+    with col3:
+        st.metric("Atraso médio", f"{np.mean(list(atrasos.values())):.1f}")
+    
+    # ═══════════════════════════════════════════════════════
+    # SEÇÃO 3: COOCORRÊNCIA
+    # ═══════════════════════════════════════════════════════
+    st.markdown("## 🔗 COOCORRÊNCIA (Pares & Trios)")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info("**Top 5 Pares**")
+        top_pares = pares_freq.most_common(5)
+        for (a, b), count in top_pares:
+            freq_perc = (count / len(sorteios)) * 100
+            st.write(f"({a:02d}, {b:02d}): **{freq_perc:.1f}%**")
+    
+    with col2:
+        st.info("**Top 5 Trios**")
+        top_trios = trios_freq.most_common(5)
+        for trio, count in top_trios:
+            freq_perc = (count / len(sorteios)) * 100
+            st.write(f"{trio}: **{freq_perc:.1f}%**")
+    
+    # ═══════════════════════════════════════════════════════
+    # SEÇÃO 4: SCORES CONSOLIDADOS
+    # ═══════════════════════════════════════════════════════
+    st.markdown("## 📈 RANKING FINAL (62 Análises)")
+    ranking_62 = pd.DataFrame([
+        {"Nº": n, "Score": f"{score:.1f}%", "Freq": f"{freq[n]}", "Atraso": f"{atrasos[n]}"}
+        for n, score in sorted(scores_62.items(), key=lambda x: -x[1])
+    ])
+    st.dataframe(ranking_62, use_container_width=True, hide_index=True)
+    
+    # ═══════════════════════════════════════════════════════
+    # SEÇÃO 5: RESUMO EXECUTIVO
+    # ═══════════════════════════════════════════════════════
+    st.markdown("## 🎯 POOL FINAL RECOMENDADO")
+    top_15 = sorted(scores_62.items(), key=lambda x: -x[1])[:15]
+    pool = sorted([n for n, _ in top_15])
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.success(f"**15 Números Selecionados:**")
+        st.code(f"{' '.join(str(n).zfill(2) for n in pool)}")
+    
+    with col2:
+        st.metric("Score médio do pool", f"{np.mean([scores_62[n] for n in pool]):.1f}%")
+    
+    st.success("✅ **Relatório consolidado!** Use o Pool Final recomendado para Gerar os jogos.")
+
+# ============================================================
+# ABA 15: GERAR (original, mantido igual)
 # ============================================================
 with tabs[15]:
     st.subheader("🎰 Gerar Jogos")
